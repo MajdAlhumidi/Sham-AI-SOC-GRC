@@ -165,6 +165,9 @@ def update_risk(risk_id: str, payload: RiskUpdate, x_actor: str = Header(default
         "residual_likelihood", "residual_impact", "treatment", "status",
     }
     changes = {key: value for key, value in changes.items() if key in allowed}
+    invalid_nulls = [key for key, value in changes.items() if value is None and key not in {"residual_likelihood", "residual_impact"}]
+    if invalid_nulls:
+        raise HTTPException(status_code=422, detail=f"Fields cannot be null: {', '.join(invalid_nulls)}")
     if not changes:
         return get_risk(risk_id)
 
@@ -287,6 +290,9 @@ def update_control(control_id: str, payload: ControlUpdate, x_actor: str = Heade
         "implementation_status", "owner", "review_frequency",
     }
     changes = {key: value for key, value in changes.items() if key in allowed}
+    invalid_nulls = [key for key, value in changes.items() if value is None and key != "framework_ref"]
+    if invalid_nulls:
+        raise HTTPException(status_code=422, detail=f"Fields cannot be null: {', '.join(invalid_nulls)}")
     if not changes:
         with db_session() as connection:
             row = _get_control(connection, control_id)
