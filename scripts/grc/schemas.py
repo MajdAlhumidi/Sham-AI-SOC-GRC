@@ -97,7 +97,7 @@ class AgentAssessmentInput(BaseModel):
     confidence: Optional[float] = Field(None, ge=0, le=1)
     model_name: str = Field("", max_length=120)
     model_version: str = Field("", max_length=120)
-    recommendations: List[str] = Field(default_factory=list, max_items=20)
+    recommendations: List[str] = Field(default_factory=list)
     risk_id: Optional[str] = None
     control_ids: List[str] = Field(default_factory=list)
 
