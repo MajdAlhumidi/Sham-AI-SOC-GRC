@@ -1,8 +1,8 @@
-# SHAM AI
+# Sham-AI-SOC & GRC
 
 **Hybrid AI-SOC Agent with Integrated GRC**
 
-[![SOC and GRC checks](https://github.com/MajdAlhumidi/wazuh-aws-mikrotik-soc/actions/workflows/soc-agent-tests.yml/badge.svg?branch=main)](https://github.com/MajdAlhumidi/wazuh-aws-mikrotik-soc/actions/workflows/soc-agent-tests.yml)
+[![SOC and GRC checks](https://github.com/MajdAlhumidi/Sham-AI-SOC-GRC/actions/workflows/soc-agent-tests.yml/badge.svg?branch=main)](https://github.com/MajdAlhumidi/Sham-AI-SOC-GRC/actions/workflows/soc-agent-tests.yml)
 
 SHAM AI helps security analysts investigate Wazuh alerts, gather supporting evidence, and document their decisions. It combines local AI inference through **Ollama**, historical incident retrieval through **ChromaDB**, and a **human review workflow** with an integrated governance, risk, and compliance foundation.
 
@@ -88,7 +88,7 @@ You need:
 For a **new checkout** on the existing Ubuntu layout:
 
 ```bash
-git clone https://github.com/MajdAlhumidi/wazuh-aws-mikrotik-soc.git /home/ubuntu/soc-ai-agent
+git clone https://github.com/MajdAlhumidi/Sham-AI-SOC-GRC.git /home/ubuntu/soc-ai-agent
 cd /home/ubuntu/soc-ai-agent
 python3 -m venv .venv
 source .venv/bin/activate
