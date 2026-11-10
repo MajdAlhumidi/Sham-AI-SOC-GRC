@@ -9,6 +9,7 @@ import requests
 from datetime import datetime
 from schema import IncidentRecord
 from vector_store import store_incidents
+from grc.integration import sync_incident
 from agent_tools import (
     check_ip_reputation,
     inspect_file_hash,
@@ -490,6 +491,9 @@ def investigate_alert(alert_json: dict):
         )
         store_incidents([record])
         print(f"[✓] Stored {case_id} in ChromaDB permanently.", flush=True)
+
+        grc_result = sync_incident(record, alert_json)
+        print(f"[GRC] Evidence sync: {grc_result['status']}", flush=True)
 
         notify_stream(
             event_type="INVESTIGATION_REPORT",

@@ -6,10 +6,19 @@ from typing import List, Dict, Any, Optional, Literal
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
-import chromadb
-from review_audit import append_human_review
+
+# Support both "python scripts/api_server.py" and "uvicorn scripts.api_server:app".
+if __package__:
+    from .review_audit import append_human_review
+    from .grc.integration import sync_human_review
+    from .grc.router import router as grc_router
+else:
+    from review_audit import append_human_review
+    from grc.integration import sync_human_review
+    from grc.router import router as grc_router
 
 app = FastAPI(title="Cyber SOC Command Center")
+app.include_router(grc_router, prefix="/api")
 
 CHROMA_DB_PATH = "/home/ubuntu/soc-ai-agent/incident_vector_db"
 
@@ -19,6 +28,7 @@ def get_real_incidents_from_chroma() -> List[Dict[str, Any]]:
         if not os.path.exists(CHROMA_DB_PATH):
             return []
         
+        import chromadb
         client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
         collection = client.get_collection("security_incidents")
         data = collection.get()
@@ -197,6 +207,7 @@ async def record_human_review(
         "incident_id": record["incident_id"],
         "human_decision": record["human_decision"],
         "final_classification": record["final_classification"],
+        "grc_sync": sync_human_review(record),
     }
 
 

@@ -12,3 +12,11 @@ venv/
 aws_credentials
 logs/
 *.jsonl
+
+# Local GRC data (never commit the SQLite database)
+data/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.db-wal
+*.db-shm

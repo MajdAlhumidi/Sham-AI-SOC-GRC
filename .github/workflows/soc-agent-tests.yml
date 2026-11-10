@@ -21,10 +21,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install minimal test dependency
-        run: python -m pip install requests
+      - name: Install test dependencies
+        run: python -m pip install requests fastapi httpx
       - name: Compile Python modules
         run: python -m compileall -q scripts
       - name: Run investigation policy tests
         working-directory: scripts
+        run: python -m unittest discover -s tests -v
+      - name: Run GRC and SOC integration tests
         run: python -m unittest discover -s tests -v

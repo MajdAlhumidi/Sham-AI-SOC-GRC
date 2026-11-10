@@ -5,6 +5,76 @@ An autonomous hybrid security operations monitoring infrastructure integrating A
 
 ---
 
+## Integrated GRC Foundation
+
+The verified Ollama investigation workflow and GRC foundation are now available
+in the same branch. The existing incident dashboard and human-review endpoint
+are preserved. GRC exposes risk, control, evidence, approval, and audit APIs
+under `/api/grc`; it does not add a separate graphical dashboard.
+
+To enable local evidence synchronization, set these variables in **both** the
+SOC agent service and the FastAPI service:
+
+```bash
+export SOC_GRC_ENABLED=true
+export GRC_DB_PATH=/var/lib/sham-ai/grc.sqlite3
+```
+
+Use the same absolute database path for both services, and ensure their service
+accounts can write its directory. SQLite must be on a local filesystem on the
+same host. Add these settings to the actual service environments; exporting
+them in an interactive shell does not update a running systemd service.
+
+In the API service environment, also configure a separate strong secret:
+
+```bash
+export SOC_GRC_API_TOKEN='replace-with-a-long-random-secret'
+```
+
+Restart the relevant services after updating their environments. Every GRC API
+request requires `X-GRC-Token`; routes return 503 when no token is configured
+and 401 for missing or incorrect credentials. Use TLS or a protected local
+connection for API access. Existing `SOC_REVIEW_API_TOKEN` protection remains
+in place for `POST /api/reviews`.
+
+```bash
+curl -sS http://127.0.0.1:8000/api/grc/health \
+  -H "X-GRC-Token: ${SOC_GRC_API_TOKEN}"
+```
+
+With synchronization enabled, a successfully persisted SOC incident adds a
+Wazuh evidence reference under `SHAM-LOG-001` and the AI assessment provenance
+under `SHAM-AI-002`. The evidence records the actual model/provider, fallback
+flag, report fingerprint, and containment status. Full raw logs and model
+reports stay in the existing SOC store. Replaying identical synchronization
+events does not duplicate evidence.
+
+Human decisions continue to be appended to the original JSONL review log and
+are separately linked to `SHAM-AI-001` in GRC. The original AI assessment is
+not overwritten or relabeled as human verified. The review response contains
+`grc_sync` so a failed mirror is visible while the original review remains
+saved. Agent synchronization failures are logged and do not stop dashboard
+broadcasting. Synchronization is opt-in (`SOC_GRC_ENABLED=false` by default).
+
+These internal control links record evidence provenance; they do not mark
+controls implemented, create risk scores, approve actions, or execute
+containment. GRC approvals are records only. `NOT_EXECUTED` and the existing
+human decision boundary remain unchanged. See [GRC API details](scripts/grc/README.md).
+
+Validation commands from the repository root:
+
+```bash
+python -m pip install requests fastapi httpx
+python -m compileall -q scripts tests
+PYTHONPATH=scripts python -m unittest discover -s scripts/tests -v
+python -m unittest discover -s tests -v
+```
+
+The commands above use Linux shell syntax. Alternatively, run the script-level
+tests from the `scripts` directory as CI does. The tests use temporary
+SQLite storage and mocked model/security services; they do not validate a live
+Wazuh or Ollama deployment.
+
 ## Incident Verification and Safe-Operation Notes
 
 ### LLM Provider Configuration

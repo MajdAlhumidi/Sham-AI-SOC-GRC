@@ -33,7 +33,8 @@ class HumanReviewAuditTests(unittest.TestCase):
             saved = json.loads(handle.readline())
         self.assertEqual(saved["incident_id"], "INC-TEST-001")
         self.assertEqual(saved["review_id"], record["review_id"])
-        self.assertEqual(os.stat(self.log_path).st_mode & 0o777, 0o600)
+        if os.name == "posix":
+            self.assertEqual(os.stat(self.log_path).st_mode & 0o777, 0o600)
 
     def test_corrected_decision_requires_a_different_final_classification(self):
         payload = {
