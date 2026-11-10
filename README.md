@@ -1,85 +1,107 @@
-Markdown
-# AI-Powered Hybrid Cloud SOC: AWS Infrastructure & On-Premise MikroTik Security Operations via Wazuh SIEM
+# SHAM AI
 
-An autonomous hybrid security operations monitoring infrastructure integrating Amazon Web Services (AWS) cloud telemetry and an on-premise MikroTik edge router into a centralized Wazuh SIEM deployed on AWS. The platform provides unified visibility across cloud control planes and local perimeter defenses, backed by a bounded AI SOC Agent. Local Ollama is the default model runtime, with optional Google Gemini support. The agent can adaptively call read-only tools against ChromaDB incident memory, Wazuh Indexer telemetry, and configured threat-intelligence providers. Tool calls are validated and audited locally. TheHive case creation is an optional post-investigation operation and is reported as created only after a real API response confirms it.
+**Hybrid AI-SOC Agent with Integrated GRC**
 
----
+[![SOC and GRC checks](https://github.com/MajdAlhumidi/wazuh-aws-mikrotik-soc/actions/workflows/soc-agent-tests.yml/badge.svg?branch=main)](https://github.com/MajdAlhumidi/wazuh-aws-mikrotik-soc/actions/workflows/soc-agent-tests.yml)
 
-## Integrated GRC Foundation
+SHAM AI helps security analysts investigate Wazuh alerts, gather supporting evidence, and document their decisions. It combines local AI inference through **Ollama**, historical incident retrieval through **ChromaDB**, and a **human review workflow** with an integrated governance, risk, and compliance foundation.
 
-The verified Ollama investigation workflow and GRC foundation are now available
-in the same branch. The existing incident dashboard and human-review endpoint
-are preserved. GRC exposes risk, control, evidence, approval, and audit APIs
-under `/api/grc`; it does not add a separate graphical dashboard.
+The project brings together AWS cloud telemetry and on-premises MikroTik monitoring. Its goal is to reduce repetitive triage work while keeping the analyst responsible for the final security decision.
 
-To enable local evidence synchronization, set these variables in **both** the
-SOC agent service and the FastAPI service:
+> **Current stage: development prototype.** The agent investigates and recommends. It does not isolate hosts, block addresses, or execute containment. GRC records evidence and approvals; it does not certify compliance.
 
-```bash
-export SOC_GRC_ENABLED=true
-export GRC_DB_PATH=/var/lib/sham-ai/grc.sqlite3
+**Explore:** [Capabilities](#capabilities) · [Architecture](#architecture) · [Setup](#setup) · [GRC](#grc-integration) · [Human review](#human-review) · [Tests](#tests-and-evaluation) · [Roadmap](#roadmap)
+
+## Capabilities
+
+| Component | Current implementation |
+| --- | --- |
+| Alert intake | Monitors new Wazuh JSON alerts with rule level **7 or higher**. |
+| Local AI investigation | Uses Ollama by default; the model selects relevant read-only tools and reassesses their results. |
+| Incident memory | Stores incident reports in ChromaDB and retrieves similar historical cases. |
+| Evidence collection | Queries Wazuh Indexer for related alerts, process events, and network activity. |
+| Threat intelligence | Optional AbuseIPDB, VirusTotal, and GreyNoise lookups with explicit provider availability. |
+| Reporting | Produces structured investigation reports, checks required sections, and enforces `NOT_EXECUTED` containment status. |
+| Analyst dashboard | FastAPI and WebSocket interface for incident reports, classifications, and recorded execution status. |
+| Human review | Protected API records `accepted`, `corrected`, or `escalated` decisions separately from AI suggestions. |
+| GRC foundation | SQLite-backed risk register, control catalogue, evidence, approval records, and audit events. |
+| SOC-to-GRC connection | Opt-in synchronization of incident provenance and human decisions into GRC evidence. |
+| Case management | Optional TheHive case creation after report validation and explicit configuration. |
+
+### Investigation boundaries
+
+- Tool calls are limited to a configurable budget: **6 by default, up to 12**.
+- Endpoint queries are restricted to the agent identified in the incoming alert.
+- External IP lookups require an observed, globally routable address. File-hash lookups must also reference observed indicators.
+- Missing credentials, empty evidence, and failed queries are recorded as such; they are not proof that an event is benign.
+- Report format validation checks structure, not the factual correctness of an investigation.
+- Historical classifications are context. They are not trusted ground truth unless their review metadata supports that interpretation.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    Cloud["AWS CloudTrail / S3"] --> Wazuh["Wazuh Manager and Indexer"]
+    Router["MikroTik / on-premises logs"] -->|"OpenVPN + syslog"| Wazuh
+    Wazuh -->|"New alerts: level 7+"| Agent["SHAM AI investigation agent"]
+    Agent <-->|"Local inference"| Ollama["Ollama"]
+    Agent <-->|"Historical context"| Memory["ChromaDB incident memory"]
+    Agent <-->|"Read-only queries"| Wazuh
+    Agent <-->|"Optional indicator lookups"| Intel["Threat intelligence providers"]
+    Agent --> Report["Report + tool audit trail"]
+    Report --> Analyst["Dashboard and human analyst"]
+    Analyst --> Review["Protected review API + JSONL decision log"]
+    Report -->|"Opt-in evidence synchronization"| GRC["GRC API + SQLite"]
+    Review -->|"Separate human decision record"| GRC
 ```
 
-Use the same absolute database path for both services, and ensure their service
-accounts can write its directory. SQLite must be on a local filesystem on the
-same host. Add these settings to the actual service environments; exporting
-them in an interactive shell does not update a running systemd service.
+**Investigation flow:** receive an alert → select evidence tools → assess the returned results → produce and validate a report → persist the incident → present it for human review.
 
-In the API service environment, also configure a separate strong secret:
+When enabled, GRC receives evidence references after persistence. The original AI assessment and the human decision remain separate. Optional Gemini inference and TheHive case creation are additional integrations, not required parts of the local Ollama path.
 
-```bash
-export SOC_GRC_API_TOKEN='replace-with-a-long-random-secret'
-```
+### Technology stack
 
-Restart the relevant services after updating their environments. Every GRC API
-request requires `X-GRC-Token`; routes return 503 when no token is configured
-and 401 for missing or incorrect credentials. Use TLS or a protected local
-connection for API access. Existing `SOC_REVIEW_API_TOKEN` protection remains
-in place for `POST /api/reviews`.
+| Layer | Technologies |
+| --- | --- |
+| Monitoring and telemetry | Wazuh, AWS CloudTrail, MikroTik RouterOS, syslog |
+| Application | Python, FastAPI, WebSocket |
+| AI runtime | Ollama; optional Google Gemini |
+| Historical retrieval | ChromaDB, Sentence Transformers (`all-MiniLM-L6-v2`) |
+| GRC storage | SQLite |
+| Connectivity and hosting | OpenVPN; Ubuntu on AWS EC2 or an appropriately configured local server |
+| Optional integrations | AbuseIPDB, VirusTotal, GreyNoise, TheHive |
 
-```bash
-curl -sS http://127.0.0.1:8000/api/grc/health \
-  -H "X-GRC-Token: ${SOC_GRC_API_TOKEN}"
-```
+## Setup
 
-With synchronization enabled, a successfully persisted SOC incident adds a
-Wazuh evidence reference under `SHAM-LOG-001` and the AI assessment provenance
-under `SHAM-AI-002`. The evidence records the actual model/provider, fallback
-flag, report fingerprint, and containment status. Full raw logs and model
-reports stay in the existing SOC store. Replaying identical synchronization
-events does not duplicate evidence.
+The commands below target **Ubuntu/Linux**. They start the application against an existing lab; they do not provision Wazuh, AWS, networking, or systemd services.
 
-Human decisions continue to be appended to the original JSONL review log and
-are separately linked to `SHAM-AI-001` in GRC. The original AI assessment is
-not overwritten or relabeled as human verified. The review response contains
-`grc_sync` so a failed mirror is visible while the original review remains
-saved. Agent synchronization failures are logged and do not stop dashboard
-broadcasting. Synchronization is opt-in (`SOC_GRC_ENABLED=false` by default).
+### 1. Prepare the environment
 
-These internal control links record evidence provenance; they do not mark
-controls implemented, create risk scores, approve actions, or execute
-containment. GRC approvals are records only. `NOT_EXECUTED` and the existing
-human decision boundary remain unchanged. See [GRC API details](scripts/grc/README.md).
+You need:
 
-Validation commands from the repository root:
+- Python **3.11 or later**; CI runs on Python 3.11.
+- Wazuh alerts available at `/var/ossec/logs/alerts/alerts.json`, with read access for the SOC process.
+- Wazuh Indexer access for evidence queries, using appropriate credentials and trusted TLS certificates.
+- A running Ollama instance and a model with tool-calling support. The configured default is `qwen2.5:7b`.
+- The embedding model available locally. Prepare model files and dependencies before using an offline environment.
+
+For a **new checkout** on the existing Ubuntu layout:
 
 ```bash
-python -m pip install requests fastapi httpx
-python -m compileall -q scripts tests
-PYTHONPATH=scripts python -m unittest discover -s scripts/tests -v
-python -m unittest discover -s tests -v
+git clone https://github.com/MajdAlhumidi/wazuh-aws-mikrotik-soc.git /home/ubuntu/soc-ai-agent
+cd /home/ubuntu/soc-ai-agent
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r scripts/requirements.txt
 ```
 
-The commands above use Linux shell syntax. Alternatively, run the script-level
-tests from the `scripts` directory as CI does. The tests use temporary
-SQLite storage and mocked model/security services; they do not validate a live
-Wazuh or Ollama deployment.
+For an existing checkout, use its current directory instead of cloning over it.
 
-## Incident Verification and Safe-Operation Notes
+**Storage path requirement:** the agent writes ChromaDB to `./incident_vector_db`, relative to its working directory. The dashboard currently reads `/home/ubuntu/soc-ai-agent/incident_vector_db`. Run the agent from `/home/ubuntu/soc-ai-agent`, or align the dashboard's `CHROMA_DB_PATH` with your chosen location before starting it.
 
-### LLM Provider Configuration
+### 2. Configure the agent
 
-Ollama is the default backend. Ensure the model exists in your Ollama installation and set these variables in the SOC agent process environment when needed:
+Set these variables in the SOC agent's environment:
 
 ```bash
 export SOC_LLM_PROVIDER=ollama
@@ -87,47 +109,104 @@ export SOC_OLLAMA_URL=http://127.0.0.1:11434/api/chat
 export SOC_OLLAMA_MODEL=qwen2.5:7b
 export SOC_OLLAMA_TIMEOUT_SECONDS=180
 export SOC_AGENT_MAX_TOOL_STEPS=6
-export SOC_AUDIT_LOG_PATH=logs/agent_audit.jsonl
+export SOC_AUDIT_LOG_PATH=/home/ubuntu/soc-ai-agent/logs/agent_audit.jsonl
 export SOC_THEHIVE_AUTO_CREATE=false
+
+export WAZUH_INDEXER_HOST=https://localhost:9200
+export WAZUH_INDEXER_USER='replace-with-indexer-user'
+export WAZUH_INDEXER_PASS='replace-with-indexer-password'
+export WAZUH_INDEXER_VERIFY_TLS=true
 ```
 
-Use `SOC_OLLAMA_URL` to point at a protected local endpoint or an explicitly configured SSH tunnel. Do not expose Ollama's API directly to the public internet. Choose a model that supports tool calling. To use the optional Gemini path, set `SOC_LLM_PROVIDER=gemini`, `GEMINI_API_KEY`, and optionally `GEMINI_MODEL`.
+Replace credential placeholders with your deployment values and keep secrets outside Git. Model selection must match a model actually installed in Ollama.
 
-The investigation loop defaults to six tool calls per alert and clamps the configured budget to twelve. The JSONL audit log is written to the configured path, which defaults to logs/agent_audit.jsonl. To create real TheHive cases, set THEHIVE_URL and THEHIVE_API_KEY, choose THEHIVE_API_VERSION=v4 or THEHIVE_API_VERSION=v5 for your deployment, then explicitly enable SOC_THEHIVE_AUTO_CREATE=true. The default API version is v4 for backward compatibility. A case is reported as created only when its response includes a case ID; failures to add observables or follow-up tasks are reported as partial. TLS verification is enabled by default; install a trusted certificate or set THEHIVE_VERIFY_TLS=false only in an isolated test lab.
+### 3. Start the application
 
-
-### Verification, Containment, and Transport
-
-- **Classification is evidence-based triage:** a Wazuh rule level determines prioritization, not proof of compromise. Reports without enough evidence default to `suspicious` / human review rather than an automatically confirmed true positive.
-- **Containment is not currently automated:** `trigger_containment_action` returns `NOT_CONFIGURED` and `not_executed`. It deliberately does not claim to isolate a host or block an address. A real Wazuh Active Response adapter must be configured, tested, and audited before automated containment is enabled.
-- **Dashboard status reflects recorded evidence:** new records default to `Not executed`. An event is only shown as `Executed & Verified` when its stored status explicitly says `EXECUTED_AND_VERIFIED`.
-- **Threat-intelligence status is explicit:** missing keys, API errors, and rate limits are recorded as unavailable or partial results, not as a clean reputation result.
-- **External IP privacy guard:** third-party IP reputation lookups are blocked for non-global addresses (including private, loopback, link-local, reserved, and documentation ranges), even when such an address appears in the alert. IPs must also be observed in the alert or collected endpoint evidence.
-- **Adaptive investigation:** the model selects read-only tools based on the incoming alert, receives results, and reassesses before choosing the next step. Agent-scoped Indexer searches are restricted to the alert's agent ID; IP/hash lookups must reference observed indicators.
-- **Structured evidence status:** process and network evidence queries return explicit `success`, `empty`, or `error` statuses so the agent can distinguish missing evidence from query failures.
-- **Tool audit trail:** each tool attempt records the incident ID, tool name, bounded arguments, result status, duration, and a short result excerpt in a local JSONL file. If audit writing fails, the agent tool trace explicitly flags the incomplete durable audit trail. The audit log is excluded from Git.
-- **Report quality gate:** the orchestrator checks the report title, required sections, and explicit classification. Incomplete reports are marked `REVIEW_REQUIRED` and cannot trigger optional automatic TheHive case creation. This structural check is not proof that the findings are correct.
-- **Runtime-verified action status:** the final report's containment section is replaced with the actual policy status: this version exposes read-only tools and does not execute containment. TheHive case creation is tracked separately.
-- **Historical memory caution:** ChromaDB results include the available human-review metadata. Legacy records default to review status `unknown`; their labels are reference context, not verified ground truth.
-
-- **TheHive is opt-in:** the model cannot create cases directly. A separate orchestration step can create one only after the report, when SOC_THEHIVE_AUTO_CREATE=true and THEHIVE_API_KEY are configured. No credentials means no case creation.
-- **TLS verification:** Wazuh API and Indexer verify TLS by default through `WAZUH_API_VERIFY_TLS=true` and `WAZUH_INDEXER_VERIFY_TLS=true`. TheHive also verifies TLS by default through `THEHIVE_VERIFY_TLS=true`. In an isolated lab using self-signed certificates, each setting can be explicitly set to `false`; prefer installing and trusting the correct CA certificate.
-- **Existing vector-store records:** metadata created before these changes may not contain rule-level or containment-status fields. The dashboard treats absent containment status as `Not executed`, but historical classifications may still reflect the older classifier and should be reviewed before using them as ground truth.
-
-### Recording the Human Decision
-
-The agent suggestion and the analyst's final decision must be stored separately. The protected `POST /api/reviews` endpoint records an append-only JSONL review event; it does not overwrite an incident or silently promote the result into trusted vector memory.
-
-Configure the API server with a strong secret kept outside Git:
+Start the API and dashboard from the repository root:
 
 ```bash
-export SOC_REVIEW_API_TOKEN='replace-with-a-long-random-secret'
-export SOC_HUMAN_REVIEW_LOG_PATH='logs/human_reviews.jsonl'
+python -m uvicorn scripts.api_server:app --host 127.0.0.1 --port 8000
 ```
 
-Restart the API service after adding these variables to its service environment. The route remains disabled and returns HTTP 503 when `SOC_REVIEW_API_TOKEN` is not configured. Requests require the `X-Review-Token` header and are compared in constant time.
+In another terminal, activate the same environment, apply the agent settings, and start monitoring:
 
-Example review request using fictional data:
+```bash
+cd /home/ubuntu/soc-ai-agent
+source .venv/bin/activate
+python scripts/soc_agent.py
+```
+
+The dashboard is available at `http://127.0.0.1:8000/` on that host. Use a protected connection to access a remote server. The agent broadcasts to the local API on port 8000.
+
+The monitor starts at the **end** of the alert file and processes new qualifying events. Existing lines are not replayed. In the supplied MikroTik rules, a single login failure is level 5 and will not enter the default AI workflow; repeated failures can produce a higher-level alert.
+
+For persistent deployments, configure each process's working directory and environment in its service configuration. Shell exports do not update already-running systemd services. Restart the relevant services after changing their configuration.
+
+## GRC integration
+
+The GRC foundation provides a risk register with a 5×5 likelihood–impact score, internal controls, risk-to-control mappings, evidence references, approvals, and audit records through `/api/grc`.
+
+### Enable synchronization
+
+Set the following in **both the SOC agent and API service environments**:
+
+```bash
+export SOC_GRC_ENABLED=true
+export GRC_DB_PATH=/var/lib/sham-ai/grc.sqlite3
+```
+
+Use the same absolute database path on the same host and a local filesystem. The service accounts must be able to write the database directory.
+
+In the **API service environment**, configure a dedicated secret:
+
+```bash
+export SOC_GRC_API_TOKEN='replace-with-a-long-random-secret'
+```
+
+Every GRC API request requires `X-GRC-Token`. Routes return `503` if no token is configured and `401` for missing or incorrect credentials.
+
+```bash
+curl -sS http://127.0.0.1:8000/api/grc/health \
+  -H "X-GRC-Token: ${SOC_GRC_API_TOKEN}"
+```
+
+### What is synchronized
+
+| Source | GRC evidence link | Information retained |
+| --- | --- | --- |
+| Wazuh alert | `SHAM-LOG-001` | Incident and alert references, rule, host, and timestamp |
+| AI assessment | `SHAM-AI-002` | Classification, actual model/provider, fallback flag, report fingerprint, and containment status |
+| Human review | `SHAM-AI-001` | Original review ID, incident ID, reviewer label, decision, and final classification when supplied |
+
+Synchronization is **disabled by default**. Identical bridge events are deduplicated. Full raw logs and model reports remain in the original SOC store.
+
+If synchronization fails, the original incident or review remains saved. The failure is reported in agent logs or the review response's `grc_sync` field. There is no automatic retry queue; failed mirrors require reconciliation from the retained source.
+
+These links do not automatically set risk ratings, mark controls implemented, or authorize a response. The control catalogue is an internal baseline, not a validated ISO 27001 or NIST mapping. GRC currently provides APIs rather than a dedicated graphical dashboard.
+
+See the [GRC module guide](scripts/grc/README.md) for endpoints, request examples, scoring bands, and storage details.
+
+## Human review
+
+The analyst's decision is recorded separately from the model's suggestion using `POST /api/reviews`.
+
+Configure the **API service** with a secret distinct from the GRC token:
+
+```bash
+export SOC_REVIEW_API_TOKEN='replace-with-a-different-long-random-secret'
+export SOC_HUMAN_REVIEW_LOG_PATH=/home/ubuntu/soc-ai-agent/logs/human_reviews.jsonl
+```
+
+The endpoint returns `503` until a token is configured. Requests require `X-Review-Token`; invalid credentials return `401`.
+
+| Decision | Meaning |
+| --- | --- |
+| `accepted` | Retains the agent's classification as the recorded human decision. |
+| `corrected` | Requires a final classification different from the agent's suggestion. |
+| `escalated` | Records escalation without asserting a final classification. |
+
+<details>
+<summary>Example: record a correction using fictional data</summary>
 
 ```bash
 curl -sS http://127.0.0.1:8000/api/reviews \
@@ -144,147 +223,97 @@ curl -sS http://127.0.0.1:8000/api/reviews \
   }'
 ```
 
-Allowed decisions are `accepted`, `corrected`, or `escalated`. An accepted review retains the agent classification, a correction requires a different final classification, and an escalation leaves the final classification unset. Records are appended with restrictive file permissions (0600) where supported. Review events are not yet automatically fed back into ChromaDB; curate and validate reviewed cases before using them as trusted memory.
+</details>
 
-## Architecture Overview
+Reviews are appended to JSONL with restrictive file permissions where supported. They are not automatically promoted into trusted ChromaDB memory. Shared tokens control API access; caller-supplied reviewer or actor labels are not independently verified user identities.
 
-+-------------------------------------------------------------------------------------------------------------+
-|                                                  AWS CLOUD                                                  |
-|                                                                                                             |
-|   +-----------------------+     Wazuh AWS Module / API     +--------------------------------------------+   |
-|   | AWS Services          | =============================> | AWS EC2 Instance                           |   |
-|   | - CloudTrail (Audit)  |       (S3 Bucket Logs)         | - Wazuh Manager, Indexer & Dashboard       |   |
-|   | - IAM / Security Grps |                                | - OpenVPN Server + rsyslog                 |   |
-|   +-----------------------+                                +--------------------------------------------+   |
-|                                                                    |                 ^                      |
-|                                                     High-Severity  |                 |                      |
-|                                                     Alerts (JSON)  v                 |                      |
-|                                                        +----------------------------------------+           |
-|                                                        | Autonomous AI SOC Agent (Python)       |           |
-|                                                        | - Ollama (default) / Gemini (optional) |           |
-|                                                        | - ChromaDB Vector Retrieval (RAG)      |           |
-|                                                        | - Automated Triage & Incident Reports  |           |
-|                                                        +----------------------------------------+           |
-+--------------------------------------------------------------------------------------|----------------------+
-|
-Encrypted OpenVPN Tunnel (UDP 1194)      |
-Syslog Telemetry Forwarding (UDP 514)    |
-v
-+----------------------------------+
-|   On-Premise Network             |
-|   - MikroTik RouterOS (Client)   |
-|   - Firewall & Auth Event Logs   |
-+----------------------------------+
+## Optional integrations
 
+| Integration | Configuration | Behavior |
+| --- | --- | --- |
+| Google Gemini | `SOC_LLM_PROVIDER=gemini`, `GEMINI_API_KEY`, optional `GEMINI_MODEL` | Alternative inference provider; configured default model is `gemini-2.5-flash`. |
+| AbuseIPDB | `ABUSEIPDB_API_KEY` | Public IP reputation lookup |
+| VirusTotal | `VIRUSTOTAL_API_KEY` | Public IP and observed file-hash lookups |
+| GreyNoise | `GREYNOISE_API_KEY` | Public IP context |
+| TheHive | `THEHIVE_URL`, `THEHIVE_API_KEY`, `THEHIVE_API_VERSION`, `SOC_THEHIVE_AUTO_CREATE=true` | Optional post-investigation case creation |
+
+TheHive supports configured `v4` and `v5` API paths; `v4` is the default. A case is reported as created only after the API returns its ID. Follow-up failures are reported as partial results. The model does not directly create cases; the application handles this operation after the report passes its structure check.
+
+Local model inference does not by itself make every integration offline. Gemini sends inference requests externally, and enabled threat-intelligence tools send permitted indicators to their providers. Prepare model caches and disable external integrations when designing an isolated deployment.
+
+## Security and operational notes
+
+- **Containment:** read-only investigation tools cannot isolate or block a target. Runtime report controls preserve `NOT_EXECUTED`; GRC approval records do not execute actions.
+- **Service access:** the dashboard, broadcast endpoint, and WebSocket rely on the deployment's access controls. Keep the service behind trusted network access or an authenticated reverse proxy with TLS.
+- **TLS:** verification is enabled by default for Wazuh API, Wazuh Indexer, and TheHive. Install trusted certificates rather than disabling verification in production.
+- **Secrets and data:** keep credentials, logs, incident databases, and personal or organizational data outside version control. Back up the SOC store, review log, and GRC database according to your retention policy.
+- **Audit limits:** JSONL append behavior and SQLite audit triggers provide application-level traceability. They are not protection against a privileged administrator modifying the underlying storage.
+- **Legacy records:** older incidents may lack provider, review, or containment metadata. Review historical labels before using them as verified evaluation data.
+
+## Repository guide
+
+| Path | Purpose |
+| --- | --- |
+| [`scripts/soc_agent.py`](scripts/soc_agent.py) | Main alert monitoring and investigation workflow |
+| [`scripts/investigation_agent.py`](scripts/investigation_agent.py) | Adaptive tool loop, argument validation, and tool audit trail |
+| [`scripts/agent_tools.py`](scripts/agent_tools.py) | Evidence-tool adapters and dispatch |
+| [`scripts/vector_store.py`](scripts/vector_store.py) | ChromaDB persistence and retrieval |
+| [`scripts/api_server.py`](scripts/api_server.py) | Dashboard, WebSocket, review API, and GRC routing |
+| [`scripts/report_quality.py`](scripts/report_quality.py) | Report structure checks and containment-status enforcement |
+| [`scripts/review_audit.py`](scripts/review_audit.py) | Separate human-review records |
+| [`scripts/grc/`](scripts/grc/) | GRC APIs, SQLite storage, scoring, audit, and SOC evidence bridge |
+| [`configs/`](configs/) | AWS, MikroTik, OpenVPN, and Wazuh configuration examples |
+| [`scripts/tests/`](scripts/tests/) | Investigation, report, review, and TheHive tests |
+| [`tests/`](tests/) | GRC scoring and merged SOC/GRC integration tests |
+
+Configuration examples use deployment-specific values and must be adapted to the target environment. The MikroTik logging example is stored as [`configs/mikrotik/.logging-setup`](configs/mikrotik/.logging-setup); Wazuh rules are in [`configs/wazuh/custom_rules.xml`](configs/wazuh/custom_rules.xml).
+
+<details>
+<summary>Existing lab screenshots and network diagram</summary>
+
+These assets document the monitoring lab; they are not a current GRC dashboard or proof of live AI performance.
+
+- [AWS/Wazuh dashboard](docs/aws-wazuh-dashboard.PNG)
+- [MikroTik alerts](docs/mikrotik-alerts.PNG)
+- [OpenVPN status](docs/openvpn-status.PNG)
+- [Network topology](diagrams/architecture-topology.png)
+
+</details>
+
+## Tests and evaluation
+
+Run from the repository root in a dedicated test environment:
+
+```bash
+python -m pip install requests fastapi httpx
+python -m compileall -q scripts tests
+PYTHONPATH=scripts python -m unittest discover -s scripts/tests -v
+python -m unittest discover -s tests -v
+```
+
+The commands use Linux shell syntax. On Windows, run the script-level tests from the `scripts` directory, then run the root-level tests from the repository root.
+
+The suite covers investigation boundaries, report controls, human-review behavior, TheHive response handling, GRC access protection, evidence synchronization, risk scoring, and append-only audit behavior. Integration tests use temporary SQLite databases and mocked model/security services. CI runs on pushes to `main` and feature branches, and pull requests targeting `main`.
+
+**Live validation is separate:** passing these tests does not establish detection accuracy, model quality, or performance on an AWS deployment. A planned evaluation compares manual and AI-assisted triage using the same cases, measuring time to understanding, evidence completeness, summary quality, escalation, and human correction rates. No measured improvement percentage is claimed here.
+
+## Roadmap
+
+- [x] Wazuh alert intake and historical incident retrieval
+- [x] Local Ollama investigation with bounded read-only tools
+- [x] Report quality checks and explicit containment status
+- [x] Human-review API and separate decision log
+- [x] GRC risk, control, evidence, approval, and audit APIs
+- [x] SOC incident and human-review evidence synchronization
+- [x] Automated checks on `main`
+- [ ] Measured comparison of manual and AI-assisted triage
+- [ ] Curated feedback from reviewed incidents into trusted memory
+- [ ] Dedicated GRC interface and stronger individual user/role management
+- [ ] Validated mappings to selected governance and compliance frameworks
+- [ ] Reproducible deployment packaging and broader offline validation
+
+Real response adapters remain future work and require explicit authorization, bounded permissions, and auditable execution.
 
 ---
 
-## Tech Stack & Core Components
-
-| Layer / Domain | Technology | Implementation Role |
-| :--- | :--- | :--- |
-| **SIEM Platform** | Wazuh v4.x (Manager, Indexer, Dashboard) | Central log collection, correlation engine, and visualizations |
-| **Cloud Provider** | Amazon Web Services (AWS) | Cloud host (VPC, EC2, IAM Policies, S3 Buckets, Security Groups) |
-| **Cloud Auditing** | AWS CloudTrail & S3 Ingestion | Ingesting control plane API calls, IAM modifications, and login events |
-| **Edge Router** | MikroTik RouterOS | Telemetry source for network perimeter, dropped traffic, and admin auth |
-| **Secure Transit** | OpenVPN | Site-to-Cloud encrypted tunnel preventing public exposure of Syslog data |
-| **Log Routing** | Remote Syslog (`rsyslog`) | Ingesting MikroTik UDP log stream on the private VPN interface |
-| **AI Investigation** | Python, Ollama (local default), optional Gemini, ChromaDB | Alert contextualization, local historical retrieval, and triage reporting |
-
----
-
-## Detection Capabilities & Use Cases
-
-### 1. AWS Cloud Security Monitoring
-* **IAM & Privilege Abuse:** Detection of root account logins, unauthorized policy attachments, and MFA-disabled sessions.
-* **Infrastructure Changes:** Alerts on modifications to VPC Security Groups, Route Tables, and Internet Gateways.
-* **Storage & Resource Access:** Auditing unauthorized S3 bucket access and sensitive API termination requests.
-
-### 2. MikroTik Perimeter Defense
-* **Brute-Force Detection:** Tracking repeated authentication failures across Winbox, WebFig, and SSH.
-* **Reconnaissance & Scans:** Identifying TCP/UDP port scans and dropped packet spikes on the WAN interface.
-* **Administrative Auditing:** Logging RouterOS configuration changes, script executions, and user additions.
-
-### 3. Autonomous AI Incident Triage
-* **Automated Alert Contextualization:** Correlates high-severity Wazuh alerts against historical incidents stored in ChromaDB.
-* **Evidence-Based Triage & Summarization:** Produces a plain-language investigation report; the Wazuh rule level alone is not treated as proof of compromise, and insufficient evidence defaults to human review.
-* **Prescriptive Remediation:** Outlines immediate mitigation steps (e.g., firewall block rules, IAM credential revocation).
-
----
-
-## Repository Structure
-
-```text
-├── configs/
-│   ├── aws/
-│   │   ├── wazuh-aws-module.xml.template   # Wazuh ossec.conf S3/CloudTrail bucket configuration
-│   │   └── iam-least-privilege-policy.json # Read-only IAM policy for Wazuh log ingestion
-│   ├── mikrotik/
-│   │   └── logging-setup.rsc               # RouterOS syslog forwarding and firewall logging rules
-│   ├── wazuh/
-│   │   ├── custom_decoders.xml             # Decoders tailored for MikroTik and custom event structures
-│   │   └── custom_rules.xml                # Detection rules for RouterOS attack vectors
-│   └── openvpn/
-│       └── server.conf.template            # Sanitized OpenVPN server configuration
-├── diagrams/
-│   └── architecture-topology.png           # Network and data flow architecture diagram
-├── docs/
-│   ├── aws-wazuh-dashboard.png             # Visualizations of AWS CloudTrail events
-│   ├── mikrotik-alerts.png                 # Snapshots of detected RouterOS network alerts
-│   ├── ai-triage-report.png                # Sample automated AI investigation output
-│   └── openvpn-status.png                  # Active Site-to-Cloud tunnel verification
-└── scripts/
-    ├── soc_agent.py                        # Alert intake, report generation, memory persistence, optional TheHive case
-    ├── investigation_agent.py              # Bounded adaptive tool loop, policy checks, and JSONL audit trail
-    ├── report_quality.py                   # Runtime containment-status enforcement and report structure quality gate
-    ├── agent_tools.py                      # Read-only evidence tools and controlled tool dispatch
-    ├── indexer_tool.py                     # Wazuh Indexer process, network, and related-alert queries
-    ├── threat_intel.py                     # Reputation checks with explicit provider status
-    ├── thehive_tool.py                     # Optional TheHive case/observable/task adapter
-    └── requirements.txt                    # Python runtime dependencies
-Implementation & Integration Steps
-1. AWS Cloud Integration with Wazuh
-Created a dedicated AWS S3 bucket and CloudTrail trail capturing multi-region management events.
-
-Provisioned an IAM Role with least-privilege s3:GetObject and s3:ListBucket permissions for the Wazuh manager.
-
-Configured <wodle name="aws-s3"> in ossec.conf to poll CloudTrail logs via the AWS SDK.
-
-2. OpenVPN Site-to-Cloud Tunnel
-Deployed OpenVPN server on the AWS EC2 instance hosting Wazuh.
-
-Configured MikroTik RouterOS as an OpenVPN client using dedicated client certificates.
-
-Established a private subnet bridge allowing the router to route syslog traffic without exposing ports to the public internet.
-
-3. MikroTik Log Parsing & Correlation
-Configured /system logging action in RouterOS targeting the Wazuh private OpenVPN interface (10.8.0.1:514).
-
-Implemented regex decoders and custom rules (Rule IDs 100100+) to parse RouterOS log formats and flag anomalous activity.
-
-4. Autonomous AI SOC Agent Integration
-Developed an AI triage pipeline in Python (soc_agent.py) triggered by high-severity Wazuh alerts.
-
-Configured the SOC agent to use the local Ollama HTTP API by default (model: `qwen2.5:7b`), with Google Gemini available when `SOC_LLM_PROVIDER=gemini`. Both provider paths can adaptively call the bounded read-only tool set, including ChromaDB history retrieval, Wazuh Indexer searches, and configured threat-intelligence checks.
-
-Integrated ChromaDB vector store for similarity search across historical incidents to enrich investigation reports.
-
-Security Best Practices Applied
-No Plaintext Ingestion: Edge logs are transported over an encrypted VPN tunnel; cloud logs are pulled via encrypted HTTPS endpoints using IAM authentication.
-
-Credential Sanitation: All production AWS Account IDs, Access Keys, Public IPs, and Private Certificates have been removed or replaced with placeholder templates.
-
-API Key Isolation: Gemini API credentials and cloud secrets are ingested strictly through environment variables.
-
-Granular Access Control: EC2 security groups restrict administrative access exclusively through trusted management endpoints.
-
-Project Roadmap
-[x] AWS Infrastructure & CloudTrail Log Ingestion
-
-[x] On-Premise MikroTik Integration via OpenVPN
-
-[x] Custom Log Decoders and Detection Rule Engineering
-
-[x] AI-Driven Threat Triage: Ollama/Gemini adaptive tool calling with ChromaDB memory, Wazuh Indexer enrichment, provider-status validation, and tool audit logging.
-
-[ ] Automated Active Response: Real endpoint isolation or MikroTik/Wazuh response adapters are not implemented. The current agent records recommendations and does not execute containment.
+Developed by [Majd Alhumidi](https://github.com/MajdAlhumidi). **SHAM AI keeps the analyst in control of the security decision.**
