@@ -3,6 +3,7 @@ name: SOC Agent checks
 on:
   push:
     branches:
+      - main
       - 'feature/**'
   pull_request:
     branches:
