@@ -2,6 +2,8 @@
 
 **Hybrid AI-SOC Agent with Integrated GRC**
 
+**Project website:** [Explore SHAM AI / SOC & GRC](https://majdalhumidi.github.io/Sham-AI-SOC-GRC/)
+
 [![SOC and GRC checks](https://github.com/MajdAlhumidi/Sham-AI-SOC-GRC/actions/workflows/soc-agent-tests.yml/badge.svg?branch=main)](https://github.com/MajdAlhumidi/Sham-AI-SOC-GRC/actions/workflows/soc-agent-tests.yml)
 
 SHAM AI helps security analysts investigate Wazuh alerts, gather supporting evidence, and document their decisions. It combines local AI inference through **Ollama**, historical incident retrieval through **ChromaDB**, and a **human review workflow** with an integrated governance, risk, and compliance foundation.
