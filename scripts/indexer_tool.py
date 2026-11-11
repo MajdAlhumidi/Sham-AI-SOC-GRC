@@ -1,5 +1,6 @@
 import os
 import json
+import ssl
 import urllib3
 from opensearchpy import OpenSearch
 
@@ -15,12 +16,23 @@ if not INDEXER_VERIFY_TLS:
 
 
 def get_opensearch_client() -> OpenSearch:
+    # A private CA must be explicitly trusted; hostname verification remains enabled.
+    ca_bundle = os.getenv("WAZUH_INDEXER_CA_CERTS", "").strip()
+    tls_options = {"verify_certs": INDEXER_VERIFY_TLS, "ssl_show_warn": INDEXER_VERIFY_TLS}
+    if ca_bundle and INDEXER_VERIFY_TLS:
+        tls_options["ca_certs"] = ca_bundle
+        strict = os.getenv("WAZUH_INDEXER_TLS_STRICT", "true").strip().lower() in {"1", "true", "yes", "on"}
+        if not strict:
+            # Some legacy Wazuh CAs omit Key Usage. Opt in to pre-3.13 X.509
+            # compatibility without disabling chain, expiry or hostname checks.
+            context = ssl.create_default_context(cafile=ca_bundle)
+            context.verify_flags &= ~ssl.VERIFY_X509_STRICT
+            tls_options = {"ssl_context": context}
     return OpenSearch(
         hosts=[INDEXER_HOST],
         http_auth=(INDEXER_USER, INDEXER_PASS),
-        verify_certs=INDEXER_VERIFY_TLS,
-        ssl_show_warn=INDEXER_VERIFY_TLS,
         timeout=10,
+        **tls_options,
     )
 
 def query_process_tree(agent_id: str, time_range_minutes: int = 30) -> str:

@@ -135,6 +135,12 @@ class HumanReviewInput(BaseModel):
     agent_recommendations: List[str] = Field(default_factory=list, max_items=10)
 
 
+@app.get("/api/incidents")
+def list_incidents():
+    """Keep the existing dashboard Sync DB endpoint available after upgrades."""
+    return {"incidents": get_real_incidents_from_chroma()}
+
+
 @app.post("/api/broadcast")
 async def ingest_real_agent_alert(alert: ExternalAlertInput):
     """بث التقرير المحفوظ في ChromaDB إلى المتصفح لحظياً"""

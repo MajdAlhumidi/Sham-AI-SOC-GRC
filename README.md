@@ -118,11 +118,15 @@ export WAZUH_INDEXER_HOST=https://localhost:9200
 export WAZUH_INDEXER_USER='replace-with-indexer-user'
 export WAZUH_INDEXER_PASS='replace-with-indexer-password'
 export WAZUH_INDEXER_VERIFY_TLS=true
+# Optional for a private CA; the host must match the certificate SAN.
+export WAZUH_INDEXER_CA_CERTS=/usr/local/share/sham-ai/wazuh-root-ca.pem
 ```
 
 Replace credential placeholders with your deployment values and keep secrets outside Git. Model selection must match a model actually installed in Ollama.
 
 ### 3. Start the application
+
+On Python 3.13+, a legacy Wazuh CA without a Key Usage extension may fail strict X.509 checks. Prefer reissuing the CA. As an explicit compatibility setting, `WAZUH_INDEXER_TLS_STRICT=false` with `WAZUH_INDEXER_CA_CERTS` keeps certificate-chain, expiry, and hostname verification enabled while accepting that older CA format. Strict validation remains the default.
 
 Start the API and dashboard from the repository root:
 
