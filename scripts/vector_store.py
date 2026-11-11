@@ -25,8 +25,13 @@ def store_incidents(records: list[IncidentRecord]):
     collection.add(ids=ids, documents=docs, metadatas=metas)
     print(f"[+] Successfully stored {len(records)} incidents.")
 
-def search_incidents(query_text: str, n_results: int = 1, filter_type: str = None):
-    where_filter = {"classification": filter_type} if filter_type else None
+def search_incidents(query_text: str, n_results: int = 1, filter_type: str = None, rule_name: str = None):
+    filters = []
+    if filter_type:
+        filters.append({'classification': filter_type})
+    if rule_name:
+        filters.append({'rule_name': rule_name})
+    where_filter = {'$and': filters} if len(filters) > 1 else (filters[0] if filters else None)
     
     results = collection.query(
         query_texts=[query_text],

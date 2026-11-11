@@ -48,6 +48,7 @@ class GRCIntegrationTests(unittest.TestCase):
             "SOC_REVIEW_API_TOKEN": "test-review-token",
             "SOC_HUMAN_REVIEW_LOG_PATH": str(self.review_log),
             "SOC_LLM_PROVIDER": "ollama", "SOC_OLLAMA_MODEL": "test-local-model",
+            "SOC_AUDIT_LOG_PATH": str(Path(self.directory.name) / 'tool-audit.jsonl'),
         })
         self.environment.start()
         self.client = TestClient(app)
@@ -108,7 +109,7 @@ class GRCIntegrationTests(unittest.TestCase):
         self.assertEqual(assessment["metadata"]["llm_provider"], "ollama")
 
     def test_real_soc_hook_and_human_review_preserve_separate_decisions(self):
-        from scripts import investigation_agent, report_quality, schema, alert_context
+        from scripts import investigation_agent, report_quality, schema, alert_context, historical_memory
 
         vector = types.ModuleType("vector_store")
         vector.store_incidents = Mock()
@@ -122,6 +123,7 @@ class GRCIntegrationTests(unittest.TestCase):
             "schema": schema, "vector_store": vector, "agent_tools": agent_tools,
             "investigation_agent": investigation_agent, "report_quality": report_quality,
             "alert_context": alert_context,
+            "historical_memory": historical_memory,
             "grc": scripts.grc, "grc.integration": scripts.grc.integration,
         }
         spec = importlib.util.spec_from_file_location(
@@ -151,7 +153,11 @@ class GRCIntegrationTests(unittest.TestCase):
             live = ws.receive_json()['incident']
             self.assertEqual(live['host_agent'], 'MOKROTIK-STAR')
             self.assertEqual(live['user'], 'admin')
-        with patch.object(soc, "generate_ollama_report", return_value=REPORT), \
+        history = json.dumps({'status': 'success', 'match_basis': 'same_rule_vector_search', 'historical_cases': [
+            {'incident_id': 'INC-TEST-OLD', 'rule_name': 'Single failed login', 'classification': 'suspicious', 'similarity_distance': .2}
+        ]})
+        with patch.object(investigation_agent, '_dispatch_tool', return_value=history), \
+             patch.object(soc, "generate_ollama_report", return_value=REPORT), \
              patch.object(soc, "_maybe_create_thehive_case", return_value={"status": "not_configured"}), \
              patch.object(soc, "notify_stream") as broadcast, patch("builtins.print"), \
              patch.object(soc, "uuid", types.SimpleNamespace(uuid4=Mock(side_effect=[
@@ -175,6 +181,18 @@ class GRCIntegrationTests(unittest.TestCase):
         wazuh_evidence = next(item for item in self.evidence() if item['source'] == 'wazuh')
         self.assertEqual(wazuh_evidence['metadata']['target_host'], 'MOKROTIK-STAR')
         self.assertEqual(wazuh_evidence['metadata']['agent_name'], 'wazuh-collector')
+        # The same real SOC bridge must retain retrieved IDs when the model is offline.
+        with patch.object(investigation_agent, '_dispatch_tool', return_value=history), \
+             patch.object(soc, 'generate_ollama_report', side_effect=RuntimeError('model offline')), \
+             patch.object(soc, '_maybe_create_thehive_case', return_value={'status': 'not_configured'}), \
+             patch.object(soc, 'notify_stream'), patch('builtins.print'):
+            soc.investigate_alert({**self.alert, 'id': 'offline-test'})
+        offline = vector.store_incidents.call_args.args[0][0]
+        self.assertTrue(offline.fallback_used)
+        self.assertIn('INC-TEST-OLD', offline.analyst_notes)
+        self.assertNotIn('Fallback Heuristic Record', offline.analyst_notes)
+        self.assertIn('search_historical_incidents — status: success', offline.analyst_notes)
+        self.assertTrue(report_quality.evaluate_report_quality(offline.analyst_notes)[0])
         response = self.client.post("/api/reviews", headers={"X-Review-Token": "test-review-token"}, json={
             "incident_id": saved.incident_id, "agent_classification": "suspicious",
             "decision": "corrected", "final_classification": "false_positive",

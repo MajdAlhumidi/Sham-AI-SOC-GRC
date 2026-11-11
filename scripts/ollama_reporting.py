@@ -8,8 +8,10 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 if __package__:
     from .alert_context import resolve_alert_asset, rule_mitre_ids
+    from .historical_memory import compact_history, render_historical_memory
 else:
     from alert_context import resolve_alert_asset, rule_mitre_ids
+    from historical_memory import compact_history, render_historical_memory
 
 Text = Annotated[str, Field(min_length=15, max_length=1000)]
 EvidenceRefs = Annotated[list[str], Field(min_length=1, max_length=4)]
@@ -82,11 +84,12 @@ def evidence_packet(alert, context):
     packet = {"A1": {"kind": "incoming_alert", "value": source}}
     for index, item in enumerate(context.get("tool_results", []), 1):
         try:
-            value = compact_evidence(json.loads(item["result"]))
+            parsed = json.loads(item['result'])
+            value = compact_history(parsed) if item.get('tool_name') == 'search_historical_incidents' else compact_evidence(parsed)
         except (ValueError, TypeError):
             value = compact_evidence(str(item.get("result", "")))
         encoded = json.dumps(value, ensure_ascii=False, default=str)
-        if len(encoded) > 900:
+        if len(encoded) > 900 and item.get('tool_name') != 'search_historical_incidents':
             value = {"excerpt": encoded[:900], "truncated": True}
         packet[f"T{index}"] = {"kind": "tool_result", "tool": item["tool_name"],
                               "status": item["status"], "value": value}
@@ -162,8 +165,6 @@ def render_assessment(assessment, alert, context, packet):
         "Wazuh supplied this detection mapping; it does not confirm an attack or compromise."
         for technique, refs in sorted(supplied_techniques(packet).items())
     ]
-    history = [f"- [{ref}] `{item['tool']}`: {item['status']}. Historical labels are context, not verified ground truth."
-               for ref, item in packet.items() if item.get("tool") == "search_historical_incidents"]
     intel = [f"- [{ref}] `{item['tool']}`: {item['status']}. Provider details are in the recorded tool response."
              for ref, item in packet.items() if item.get("tool") in {"check_ip_reputation", "inspect_file_hash"}]
     diagnostics = []
@@ -189,7 +190,7 @@ def render_assessment(assessment, alert, context, packet):
         "**Threat intelligence**", *(intel or ["- Not checked: no reputation/hash tool call was recorded."]), "",
         "### 3. MITRE ATT&CK Mapping", *(techniques or ["- No structured rule mapping was supplied; no MITRE technique is asserted."]), "",
         "### 4. Historical Memory Context (Vector DB)",
-        *(history or ["- Not checked: historical memory was not queried; no historical match is claimed."]), "",
+        render_historical_memory(context), "",
         "### 5. Containment & Remediation Status",
         "1. **Host Isolation**: NOT_EXECUTED. Investigation tools are read-only.",
         "2. **External Case Creation**: Not attempted by the model; the orchestrator records any subsequent action separately.", "",

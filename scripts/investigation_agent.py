@@ -28,7 +28,7 @@ EVIDENCE_TOOL_NAMES = {
 TOOL_SCHEMAS = [
     {"type": "function", "function": {
         "name": "search_historical_incidents",
-        "description": "Search local ChromaDB for similar previously stored incidents. Historical labels are context, not verified ground truth unless review metadata confirms human review.",
+        "description": "Search local ChromaDB for prior incidents within the incoming Wazuh rule when available. Historical labels are context, not verified ground truth unless review metadata confirms human review.",
         "parameters": {"type": "object", "properties": {
             "query": {"type": "string", "description": "Rule, activity, user, host, or observed indicators."},
             "n_results": {"type": "integer", "minimum": 1, "maximum": 5, "default": 3},
@@ -169,6 +169,10 @@ def _validate_arguments(context: dict, name: str, arguments: dict) -> Tuple[dict
             args["n_results"] = max(1, min(int(args.get("n_results", 3)), 5))
         except (TypeError, ValueError):
             args["n_results"] = 3
+        # Bound historical context to the observed rule, never a model-invented
+        # filter, and exclude previously saved reports of this same source alert.
+        args['rule_name'] = str((context['alert'].get('rule') or {}).get('description') or '') or None
+        args['exclude_source_alert_id'] = str(context['alert'].get('id') or '') or None
 
     if name in {"search_related_agent_logs", "inspect_process_tree", "inspect_network_connections"}:
         expected = str((context.get("alert", {}).get("agent") or {}).get("id", "")).strip()
@@ -261,9 +265,17 @@ def _execute_tool(context: dict, name: str, arguments: dict) -> str:
     return result
 
 
-def make_gemini_tools(alert: dict, incident_id: str) -> Tuple[List[Any], dict]:
-    """Build Gemini functions that share the same validation, budget, and audit controls."""
+def prepare_investigation_context(alert: dict, incident_id: str) -> dict:
+    """Retrieve and audit local memory before attempting either model provider."""
     context = _new_context(alert, incident_id)
+    query = str((alert.get('rule') or {}).get('description') or alert.get('full_log') or 'Security alert')[:1000]
+    _execute_tool(context, 'search_historical_incidents', {'query': query, 'n_results': 2})
+    return context
+
+
+def make_gemini_tools(alert: dict, incident_id: str, context=None) -> Tuple[List[Any], dict]:
+    """Build Gemini functions that share the same validation, budget, and audit controls."""
+    context = context if context is not None else _new_context(alert, incident_id)
 
     def search_historical_incidents(query: str, n_results: int = 3) -> str:
         """Search local vector memory for similar past incidents."""
@@ -314,6 +326,10 @@ def _ollama_tools(context):
     for original in TOOL_SCHEMAS:
         tool = copy.deepcopy(original)
         fn = tool["function"]
+        if fn['name'] == 'search_historical_incidents' and any(
+            x.get('tool_name') == 'search_historical_incidents' for x in context.get('tool_results', [])
+        ):
+            continue
         props = fn["parameters"]["properties"]
         fn["parameters"]["additionalProperties"] = False
         if "agent_id" in props:
@@ -409,10 +425,10 @@ Be concise: at most three evidence-backed findings, zero hypotheses, two limitat
     raise RuntimeError("No validated assessment was returned")
 
 
-def run_dynamic_ollama_agent(alert: dict, system_prompt: str, incident_id: str) -> Tuple[str, dict]:
+def run_dynamic_ollama_agent(alert: dict, system_prompt: str, incident_id: str, context=None) -> Tuple[str, dict]:
     """Collect real evidence with native tools, then validate a separate structured report."""
-    from ollama_reporting import compact_evidence
-    context = _new_context(alert, incident_id)
+    from ollama_reporting import compact_evidence, evidence_packet
+    context = context if context is not None else _new_context(alert, incident_id)
     expected = str((alert.get("agent") or {}).get("id", "")).strip()
     messages = [{"role": "system", "content": (
         "You are gathering evidence for SOC triage. Select relevant read-only tools from the provided list. "
@@ -425,7 +441,8 @@ def run_dynamic_ollama_agent(alert: dict, system_prompt: str, incident_id: str) 
         "Do not repeat an identical query. Never claim containment or external case creation. "
         f"The exact agent_id is {expected!r}; the agent name is NOT its ID. "
         "Only observed, globally routable IPs may be sent to reputation tools."
-    )}, {"role": "user", "content": json.dumps({"alert": compact_evidence(alert)}, ensure_ascii=False, default=str)}]
+    )}, {"role": "user", "content": json.dumps({"alert": compact_evidence(alert),
+        "already_collected_evidence": {key: value for key, value in evidence_packet(alert, context).items() if key != 'A1'}}, ensure_ascii=False, default=str)}]
     malformed_retries = 0
     try:
         while context["tool_calls"] < context["max_tool_calls"]:

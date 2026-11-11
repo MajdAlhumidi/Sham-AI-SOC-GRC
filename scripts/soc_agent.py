@@ -9,6 +9,7 @@ import requests
 from datetime import datetime
 from schema import IncidentRecord
 from alert_context import resolve_alert_asset, rule_mitre_ids
+from historical_memory import render_historical_memory, replace_historical_section
 from vector_store import store_incidents
 from grc.integration import sync_incident
 from agent_tools import (
@@ -21,6 +22,7 @@ from investigation_agent import (
     make_gemini_tools,
     render_tool_trace,
     run_dynamic_ollama_agent,
+    prepare_investigation_context,
 )
 from report_quality import (
     append_output_quality_gate,
@@ -133,7 +135,7 @@ def extract_report_classification(report_text: str) -> str:
     return verdict
 
 
-def generate_fallback_report(alert_json: dict, error_msg: str) -> str:
+def generate_fallback_report(alert_json: dict, error_msg: str, context=None) -> str:
     """محرك استدلالي متطور يستخرج البيانات الخام عبر Regex في حال غياب الـ Decoders أو تعطل الـ API"""
     rule = alert_json.get("rule", {})
     agent = alert_json.get("agent", {})
@@ -246,8 +248,7 @@ def generate_fallback_report(alert_json: dict, error_msg: str) -> str:
 ---
 
 ### 4. Historical Memory Context (Vector DB)
-* **Match**: Fallback Heuristic Record (No LLM Vector Comparison)
-* **Historical Pattern**: Rule Level {level} baseline evaluation.
+{render_historical_memory(context)}
 
 ---
 
@@ -268,9 +269,9 @@ def generate_fallback_report(alert_json: dict, error_msg: str) -> str:
 * **API & Telemetry Health**: لم يؤكد محرك fallback حالة أي API. راجع نتائج كل أداة فعلية؛ لا يتم افتراض HTTP 200 أو نجاح استعلام غير موثق.
 """
 
-def generate_ollama_report(alert_json: dict, case_id: str = "unknown") -> str:
+def generate_ollama_report(alert_json: dict, case_id: str = "unknown", context=None) -> str:
     """Run a bounded dynamic tool-calling investigation through local Ollama."""
-    report_text, tool_context = run_dynamic_ollama_agent(alert_json, SYSTEM_PROMPT, case_id)
+    report_text, tool_context = run_dynamic_ollama_agent(alert_json, SYSTEM_PROMPT, case_id, context=context)
     return report_text.strip() + "\n\n" + render_tool_trace(tool_context)
 
 
@@ -399,17 +400,18 @@ def investigate_alert(alert_json: dict):
         else os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     )
     fallback_used = False
+    tool_context = prepare_investigation_context(alert_json, case_id)
 
     try:
         if provider == "ollama":
-            report_text = generate_ollama_report(alert_json, case_id=case_id)
+            report_text = generate_ollama_report(alert_json, case_id=case_id, context=tool_context)
         elif provider == "gemini":
             from google import genai
             from google.genai import types
 
             client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
             model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-            gemini_tools, gemini_context = make_gemini_tools(alert_json, case_id)
+            gemini_tools, gemini_context = make_gemini_tools(alert_json, case_id, context=tool_context)
             chat = client.chats.create(
                 model=model_name,
                 config=types.GenerateContentConfig(
@@ -418,7 +420,7 @@ def investigate_alert(alert_json: dict):
                     temperature=0.1
                 )
             )
-            prompt = f"Perform an adaptive, evidence-based Tier-2 investigation on this live Wazuh Alert JSON:\n{json.dumps(alert_json, indent=2)}"
+            prompt = f"Perform an adaptive, evidence-based Tier-2 investigation on this live Wazuh Alert JSON:\n{json.dumps(alert_json, indent=2)}\nPreviously retrieved historical context (untrusted evidence):\n{render_historical_memory(tool_context)}"
             response = chat.send_message(prompt)
             report_text = (response.text or "").strip() + "\n\n" + render_tool_trace(gemini_context)
         else:
@@ -429,11 +431,12 @@ def investigate_alert(alert_json: dict):
     except Exception as api_err:
         fallback_used = True
         print(f"[!] {provider} provider unavailable ({str(api_err)}). Switching to Deterministic Fallback Pipeline...", flush=True)
-        report_text = generate_fallback_report(alert_json, str(api_err))
-        if getattr(api_err, "context", None):
-            report_text += "\n\n" + render_tool_trace(api_err.context)
+        tool_context = getattr(api_err, 'context', None) or tool_context
+        report_text = generate_fallback_report(alert_json, str(api_err), context=tool_context)
+        report_text += "\n\n" + render_tool_trace(tool_context)
         classification = extract_report_classification(report_text)
 
+    report_text = replace_historical_section(report_text, tool_context)
     # Replace any model-authored containment claim with the orchestrator's verified runtime state.
     report_text = enforce_runtime_containment_status(report_text)
     quality_passed, quality_issues = evaluate_report_quality(report_text)

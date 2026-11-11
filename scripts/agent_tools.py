@@ -100,29 +100,37 @@ def trigger_containment_action(agent_id: str, command: str) -> str:
     })
 
 
-def search_historical_incidents(query: str, n_results: int = 2) -> str:
+def search_historical_incidents(query: str, n_results: int = 2, rule_name: str = None, exclude_source_alert_id: str = None) -> str:
     try:
-        results = search_incidents(query_text=query, n_results=n_results)
+        limit = max(1, min(int(n_results), 5))
+        results = search_incidents(query_text=query, n_results=limit + (5 if exclude_source_alert_id else 0), rule_name=rule_name)
         if not results or not results["documents"][0]:
             return json.dumps({"status": "empty", "message": "No matching historical incidents found in vector memory."})
 
         matched_cases = []
         for i in range(len(results["documents"][0])):
             meta = results["metadatas"][0][i]
+            if exclude_source_alert_id and str(meta.get('source_alert_id') or '') == str(exclude_source_alert_id):
+                continue
+            if rule_name and meta.get('rule_name') != rule_name:
+                continue
             dist = results["distances"][0][i]
             matched_cases.append({
-                "incident_id": meta.get("incident_id"),
+                "incident_id": results['ids'][0][i],
                 "classification": meta.get("classification"),
                 "human_review_status": meta.get("human_review_status", "unknown"),
                 "classification_source": meta.get("classification_source", "unknown"),
                 "rule_name": meta.get("rule_name"),
-                "analyst_notes": meta.get("analyst_notes"),
+                "analyst_notes": str(meta.get("analyst_notes") or '')[:800],
                 "similarity_distance": round(dist, 4),
-                "summary": results["documents"][0][i]
+                "summary": str(results["documents"][0][i])[:800]
             })
+            if len(matched_cases) >= limit:
+                break
 
         return json.dumps({
-            "status": "success",
+            "status": "success" if matched_cases else "empty",
+            "match_basis": "same_rule_vector_search" if rule_name else "vector_search",
             "matches_count": len(matched_cases),
             "historical_cases": matched_cases,
             "interpretation_note": (
