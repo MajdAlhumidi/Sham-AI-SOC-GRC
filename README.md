@@ -259,6 +259,7 @@ Local model inference does not by itself make every integration offline. Gemini 
 - **TLS:** verification is enabled by default for Wazuh API, Wazuh Indexer, and TheHive. Install trusted certificates rather than disabling verification in production.
 - **Secrets and data:** keep credentials, logs, incident databases, and personal or organizational data outside version control. Back up the SOC store, review log, and GRC database according to your retention policy.
 - **Audit limits:** JSONL append behavior and SQLite audit triggers provide application-level traceability. They are not protection against a privileged administrator modifying the underlying storage.
+- **Incident identity:** new incidents use a full UUID and retain `source_alert_id` in vector metadata for reconciliation with Wazuh; legacy IDs remain unchanged.
 - **Legacy records:** older incidents may lack provider, review, or containment metadata. Review historical labels before using them as verified evaluation data.
 
 ## Repository guide

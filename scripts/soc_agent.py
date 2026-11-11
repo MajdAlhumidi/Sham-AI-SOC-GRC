@@ -387,7 +387,7 @@ def investigate_alert(alert_json: dict):
     rule_desc = alert_json.get("rule", {}).get("description", "Unknown Alert")
     rule_level = alert_json.get("rule", {}).get("level", 0)
     agent_name = alert_json.get("agent", {}).get("name", alert_json.get("agent", {}).get("ip", "Unknown Host"))
-    case_id = f"INC-{datetime.utcnow().strftime('%Y%m%d')}-{uuid.uuid4().hex[:4].upper()}"
+    case_id = f"INC-{datetime.utcnow().strftime('%Y%m%d')}-{uuid.uuid4().hex.upper()}"
 
     print("\n" + "="*60, flush=True)
     print(f"[+] Processing Alert: [Level {rule_level}] {rule_desc}", flush=True)
@@ -476,6 +476,7 @@ def investigate_alert(alert_json: dict):
 
         record = IncidentRecord(
             incident_id=case_id,
+            source_alert_id=str(alert_json.get("id") or ""),
             rule_name=rule_desc,
             classification=classification,
             alert_summary=f"Automated Tier-2 triage for {rule_desc} on {agent_name}",

@@ -131,13 +131,22 @@ class GRCIntegrationTests(unittest.TestCase):
             spec.loader.exec_module(soc)
         with patch.object(soc, "generate_ollama_report", return_value=REPORT), \
              patch.object(soc, "_maybe_create_thehive_case", return_value={"status": "not_configured"}), \
-             patch.object(soc, "notify_stream") as broadcast, patch("builtins.print"):
+             patch.object(soc, "notify_stream") as broadcast, patch("builtins.print"), \
+             patch.object(soc, "uuid", types.SimpleNamespace(uuid4=Mock(side_effect=[
+                 types.SimpleNamespace(hex="abcd" + "1" * 28),
+                 types.SimpleNamespace(hex="abcd" + "2" * 28),
+             ]))):
             soc.investigate_alert(self.alert)
-        vector.store_incidents.assert_called_once()
-        broadcast.assert_called_once()
-        saved = vector.store_incidents.call_args.args[0][0]
+            soc.investigate_alert({**self.alert, "id": "alert-456"})
+        self.assertEqual(vector.store_incidents.call_count, 2)
+        self.assertEqual(broadcast.call_count, 2)
+        saved = vector.store_incidents.call_args_list[0].args[0][0]
+        second = vector.store_incidents.call_args_list[1].args[0][0]
+        self.assertNotEqual(saved.incident_id, second.incident_id)
+        self.assertEqual(saved.to_metadata()["source_alert_id"], self.alert["id"])
+        self.assertEqual(second.to_metadata()["source_alert_id"], "alert-456")
         self.assertEqual(saved.containment_status, "NOT_EXECUTED")
-        self.assertEqual(len(self.evidence()), 2)
+        self.assertEqual(len(self.evidence()), 4)
         response = self.client.post("/api/reviews", headers={"X-Review-Token": "test-review-token"}, json={
             "incident_id": saved.incident_id, "agent_classification": "suspicious",
             "decision": "corrected", "final_classification": "false_positive",

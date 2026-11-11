@@ -5,6 +5,7 @@ from datetime import datetime
 
 class IncidentRecord(BaseModel):
     incident_id: str
+    source_alert_id: str = ""
     rule_name: str
     classification: Literal["true_positive", "false_positive", "suspicious", "benign", "unknown"]
     analyst_notes: str
@@ -41,6 +42,7 @@ class IncidentRecord(BaseModel):
     def to_metadata(self) -> dict:
         return {
             "incident_id": self.incident_id,
+            "source_alert_id": self.source_alert_id,
             "rule_name": self.rule_name,
             "classification": self.classification,
             "analyst_notes": self.analyst_notes,
