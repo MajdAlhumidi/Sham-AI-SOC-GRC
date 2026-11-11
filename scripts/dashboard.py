@@ -1,9 +1,9 @@
-"""Original Agent dashboard restored from the pre-upgrade deployment backup."""
+"""Compact incident triage dashboard with safe, readable investigation reports."""
 import html
 import json
 from fastapi.responses import HTMLResponse
 
-HTML_TEMPLATE = """<!DOCTYPE html>
+HTML_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -14,74 +14,133 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg: #070A10; --surface: #0D121C; --surface-2: #111B2A; --deep: #060910;
-      --border: #1C2536; --text: #E6EBF2; --text-2: #B4BFD0; --muted: #8A97AB;
+      color-scheme: dark;
+      --bg: #070A10; --surface: #0D121C; --surface-2: #111B2A; --deep: #080D15;
+      --border: #202C3E; --text: #E6EBF2; --text-2: #B4BFD0; --muted: #8A97AB;
       --cyan: #4CC9F0; --red: #FF7A87; --amber: #FFA94D; --yellow: #F5D547; --green: #3DDC97;
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: var(--bg); color: var(--text); font-family: 'IBM Plex Sans', system-ui, sans-serif; min-height: 100vh; display: flex; flex-direction: column; }
-    .mono { font-family: 'IBM Plex Mono', monospace; }
+    * { box-sizing: border-box; margin: 0; padding: 0; scrollbar-width: thin; scrollbar-color: #34465F transparent; }
+    [hidden] { display: none !important; }
+    body { background: var(--bg); color: var(--text); font-family: 'IBM Plex Sans', system-ui, sans-serif; min-height: 100vh; line-height: 1.45; }
+    .mono { font-family: 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; }
     button { font-family: inherit; cursor: pointer; }
-    button:focus-visible, input:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
-
-    header { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between; padding: 14px 28px; border-bottom: 1px solid var(--border); background: #0A0F18; position: sticky; top: 0; z-index: 50; }
-    .brand { display: flex; align-items: center; gap: 12px; }
-    .brand-title { font-weight: 600; font-size: 15px; letter-spacing: .08em; }
-    .brand-sub { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--muted); }
-    .head-right { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; font-family: 'IBM Plex Mono', monospace; font-size: 12px; }
-    .live { display: inline-flex; align-items: center; gap: 8px; border: 1px solid #1F5E48; color: var(--green); padding: 5px 12px; border-radius: 4px; }
-    .live i { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+    button:focus-visible, input:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--cyan); outline-offset: -2px; }
+    header { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 10px 18px; border-bottom: 1px solid var(--border); background: #0A0F18; flex-shrink: 0; }
+    .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .brand-title { font-weight: 600; font-size: 14px; letter-spacing: .07em; }
+    .brand-sub { font-size: 11px; color: var(--muted); }
+    .head-right { display: flex; gap: 12px; align-items: center; font-family: 'IBM Plex Mono', monospace; font-size: 11px; flex-shrink: 0; }
+    .live { display: inline-flex; align-items: center; gap: 7px; border: 1px solid #1F5E48; color: var(--green); padding: 4px 9px; border-radius: 5px; white-space: nowrap; }
+    .live i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
     .clock { color: var(--muted); }
-
-    .layout { padding: 22px 28px; display: flex; flex-direction: column; gap: 18px; flex: 1; width: 100%; max-width: 1700px; margin: 0 auto; }
-    .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; }
-    .kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 14px 18px; }
-    .kpi .l { font-size: 11px; letter-spacing: .08em; color: var(--muted); text-transform: uppercase; }
-    .kpi .v { font-family: 'IBM Plex Mono', monospace; font-size: 30px; font-weight: 600; margin-top: 6px; }
-
-    .toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px; }
-    .search { display: flex; align-items: center; gap: 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 0 12px; min-width: 280px; flex: 1; max-width: 420px; }
-    .search input { background: transparent; border: 0; outline: 0; color: var(--text); font-family: 'IBM Plex Mono', monospace; font-size: 12px; height: 44px; width: 100%; }
-    .search input::placeholder { color: #5E6B80; }
-    .pills { display: flex; flex-wrap: wrap; gap: 8px; }
-    .pill { min-height: 44px; padding: 0 16px; border-radius: 4px; border: 1px solid var(--border); background: #0A0F18; color: var(--text-2); font-size: 12px; }
-    .pill:hover { color: #fff; }
-    .pill.active { border-color: var(--cyan); background: #0F2A38; color: var(--cyan); font-weight: 600; }
-    .sync { min-height: 44px; padding: 0 16px; border-radius: 4px; border: 1px solid var(--border); background: #0A0F18; color: var(--text); font-size: 12px; font-weight: 600; }
-
-    .workspace { display: grid; grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); gap: 16px; align-items: start; }
-    .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
-    .panel-head { display: flex; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 11px; letter-spacing: .08em; color: var(--muted); text-transform: uppercase; }
-    .scroll-x { overflow: auto; max-height: 560px; }
-    table { width: 100%; border-collapse: collapse; min-width: 680px; font-size: 12px; }
-    th { position: sticky; top: 0; background: #0D121C; text-align: left; color: var(--muted); font-size: 10.5px; letter-spacing: .07em; font-weight: 500; padding: 10px 12px; border-bottom: 1px solid var(--border); text-transform: uppercase; }
-    td { padding: 11px 12px; border-top: 1px solid var(--border); white-space: nowrap; }
+    .layout { padding: 12px 16px; display: flex; flex-direction: column; gap: 10px; width: 100%; min-height: 0; flex: 1; }
+    .kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; flex-shrink: 0; }
+    .kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 10px 13px; position: relative; overflow: hidden; }
+    .kpi::before { content: ''; position: absolute; inset: 12px auto 12px 0; width: 2px; background: var(--muted); }
+    .kpi:nth-child(2)::before { background: var(--red); }
+    .kpi:nth-child(3)::before { background: var(--yellow); }
+    .kpi:nth-child(4)::before { background: var(--green); }
+    .kpi:nth-child(5)::before { background: var(--cyan); }
+    .kpi .l { font-size: 10px; letter-spacing: .055em; color: var(--muted); text-transform: uppercase; }
+    .kpi .v { font-family: 'IBM Plex Mono', monospace; font-size: 26px; font-weight: 600; line-height: 1.2; margin-top: 4px; font-variant-numeric: tabular-nums; }
+    .toolbar { display: flex; gap: 8px; align-items: center; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 7px; flex-shrink: 0; }
+    .search { display: flex; align-items: center; gap: 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 5px; padding: 0 10px; min-width: 160px; flex: 1; }
+    .search svg { flex-shrink: 0; }
+    .search input { background: transparent; border: 0; color: var(--text); font-size: 12px; height: 36px; width: 100%; min-width: 0; }
+    .search input::placeholder { color: var(--muted); }
+    .pills { display: flex; gap: 4px; }
+    .pill, .sync, .report-toggle { min-height: 36px; padding: 0 12px; border-radius: 5px; border: 1px solid var(--border); background: #0A0F18; color: var(--text-2); font-size: 12px; white-space: nowrap; }
+    .pill:hover, .sync:hover, .report-toggle:hover { background: var(--surface-2); color: var(--text); border-color: #3B506C; }
+    .pill.active { border-color: #2F7891; background: #102A38; color: var(--cyan); font-weight: 600; }
+    .sync { color: var(--text); font-weight: 600; }
+    .workspace { display: grid; grid-template-columns: minmax(0, 1.16fr) minmax(0, 1fr); gap: 10px; min-height: 0; flex: 1; }
+    .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 7px; min-width: 0; min-height: 0; overflow: hidden; }
+    .feed { display: flex; flex-direction: column; }
+    .panel-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 11px; color: var(--muted); flex-shrink: 0; }
+    .panel-head > span:first-child { color: var(--text); font-weight: 600; }
+    #visible-count { background: var(--surface-2); color: var(--cyan); border-radius: 4px; padding: 2px 6px; margin-left: 4px; font-variant-numeric: tabular-nums; }
+    .scroll-x { overflow: auto; flex: 1; min-height: 0; overscroll-behavior: contain; }
+    table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 12px; }
+    .col-severity { width: 76px; } .col-case { width: 164px; } .col-verdict { width: 112px; }
+    th { position: sticky; top: 0; z-index: 1; background: #101824; text-align: left; color: var(--muted); font-size: 10px; letter-spacing: .05em; font-weight: 500; padding: 9px 10px; border-bottom: 1px solid var(--border); text-transform: uppercase; }
+    td { padding: 9px 10px; border-bottom: 1px solid #192334; vertical-align: middle; overflow: hidden; }
     tbody tr { cursor: pointer; }
-    tbody tr:hover { background: #0F1826; }
-    tr.selected { background: var(--surface-2) !important; box-shadow: inset 3px 0 0 var(--cyan); }
-    .rule-cell { max-width: 240px; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); }
-
-    .sev { font-family: 'IBM Plex Mono', monospace; font-weight: 600; }
+    tbody tr:hover { background: #101B2A; }
+    tr.selected { background: var(--surface-2); box-shadow: inset 3px 0 0 var(--cyan); }
+    .case-button { display: block; width: 100%; border: 0; background: transparent; color: var(--text); font-size: 11px; font-weight: 500; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 0; }
+    .cell-sub { display: block; margin-top: 3px; color: var(--muted); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .rule-name { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; overflow: hidden; color: var(--text-2); line-height: 1.4; }
+    .sev { font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; white-space: nowrap; }
     .sev-crit { color: var(--red); } .sev-high { color: var(--amber); } .sev-med { color: var(--yellow); } .sev-low { color: var(--green); }
-
-    .badge { display: inline-block; font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 600; padding: 4px 9px; border-radius: 4px; text-transform: uppercase; border: 1px solid; }
-    .badge-tp { color: var(--red); border-color: #6E2A33; background: #2A1217; }
-    .badge-fp { color: var(--green); border-color: #1F5E48; background: #0E2A21; }
-    .badge-susp { color: var(--yellow); border-color: #6B5C1B; background: #2A2410; }
-
-    .inspector { padding: 18px; display: flex; flex-direction: column; gap: 16px; }
-    .insp-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--border); padding-bottom: 14px; }
-    .insp-id { font-family: 'IBM Plex Mono', monospace; font-size: 16px; font-weight: 600; word-break: break-all; }
-    .insp-rule { font-size: 12.5px; color: var(--text-2); margin-top: 4px; }
-    .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
-    .art { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 10px 12px; }
-    .art .al { font-size: 10px; letter-spacing: .07em; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; }
-    .art .av { font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; word-break: break-all; }
-    .report { background: var(--deep); border: 1px solid var(--border); border-radius: 6px; padding: 14px; }
-    .report-title { font-size: 11px; letter-spacing: .08em; color: var(--cyan); margin-bottom: 8px; text-transform: uppercase; }
-    .report-text { font-family: 'IBM Plex Mono', monospace; font-size: 12px; line-height: 1.65; white-space: pre-wrap; max-height: 260px; overflow-y: auto; }
-    .foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; border: 1px solid var(--border); background: var(--bg); border-radius: 4px; padding: 9px 12px; font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--muted); }
+    .badge { display: inline-block; font-size: 10px; font-weight: 600; padding: 3px 7px; border-radius: 4px; text-transform: uppercase; border: 1px solid; line-height: 1.4; overflow-wrap: anywhere; }
+    .badge-tp { color: var(--red); border-color: #66303A; background: #2A151D; }
+    .badge-fp { color: var(--green); border-color: #245940; background: #10271F; }
+    .badge-susp { color: var(--yellow); border-color: #62551E; background: #282312; }
+    .inspector { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+    .insp-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+    .insp-id { font-family: 'IBM Plex Mono', monospace; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+    .insp-rule { font-size: 12px; color: var(--text-2); margin-top: 4px; overflow-wrap: anywhere; }
+    #insp-verdict-badge { max-width: 110px; }
+    .grid2 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; flex-shrink: 0; }
+    .art { background: var(--bg); border: 1px solid var(--border); border-radius: 5px; padding: 8px; min-width: 0; }
+    .art .al { font-size: 9px; letter-spacing: .055em; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; }
+    .art .av { font-family: 'IBM Plex Mono', monospace; font-size: 11px; overflow-wrap: anywhere; }
+    .report { background: var(--deep); border: 1px solid var(--border); border-radius: 6px; display: flex; flex-direction: column; min-height: 120px; flex: 1; overflow: hidden; }
+    .report-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 10px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+    .report-title { font-size: 10px; letter-spacing: .055em; color: var(--cyan); text-transform: uppercase; }
+    .report-toggle { min-height: 28px; padding: 0 8px; font-size: 10px; }
+    .report-text { font-size: 12px; line-height: 1.55; overflow: auto; overflow-wrap: anywhere; padding: 10px 12px; min-height: 0; flex: 1; overscroll-behavior: contain; }
+    .report-text.raw { font-family: 'IBM Plex Mono', monospace; font-size: 11px; white-space: pre-wrap; }
+    .report-text h3 { font-size: 12px; font-weight: 600; color: #DBEAF7; margin: 12px 0 5px; }
+    .report-text h3:first-child { margin-top: 0; }
+    .report-text p { margin: 4px 0; color: var(--text-2); }
+    .report-text ul, .report-text ol { padding-left: 18px; margin: 4px 0 8px; color: var(--text-2); }
+    .report-text li { padding-left: 2px; margin: 3px 0; }
+    .report-text li::marker { color: var(--muted); }
+    .report-text strong { color: var(--text); font-weight: 500; }
+    .report-text code { font-family: 'IBM Plex Mono', monospace; font-size: .92em; color: #A5DCEC; }
+    .report-text pre { padding: 9px; margin: 6px 0; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); overflow-x: auto; white-space: pre-wrap; }
+    .report-text hr { height: 1px; border: 0; background: var(--border); margin: 8px 0; }
+    .foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 10px; font-size: 10px; color: var(--muted); flex-shrink: 0; overflow-wrap: anywhere; }
     .foot span span { color: var(--text-2); }
+    .empty-state { padding: 28px 16px; text-align: center; color: var(--muted); font-size: 12px; }
+    .empty-state strong { display: block; margin-bottom: 6px; color: var(--text-2); font-size: 14px; }
+    @media (min-width: 1100px) and (min-height: 600px) {
+      body { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+    }
+    @media (max-width: 1199px) { .grid2 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 1099px), (max-height: 599px) {
+      .workspace { grid-template-columns: minmax(0, 1fr); }
+      .scroll-x { max-height: 380px; }
+      .report-text { max-height: 520px; }
+      .grid2 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    }
+    @media (max-width: 760px) {
+      header { padding: 10px 12px; flex-wrap: wrap; }
+      .head-right { gap: 8px; } .clock { display: none; }
+      .layout { padding: 10px; gap: 8px; }
+      .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+      .kpi { padding: 9px 10px; } .kpi .l { font-size: 9px; } .kpi .v { font-size: 23px; }
+      .kpi:first-child { grid-column: span 2; }
+      .toolbar { flex-wrap: wrap; gap: 6px; }
+      .search { flex: 1 1 calc(100% - 90px); } .sync { order: 1; }
+      .pills { order: 2; width: 100%; } .pill { flex: 1; padding: 0 7px; font-size: 11px; }
+      .search input, .pill, .sync { min-height: 40px; }
+      .workspace { gap: 8px; } .panel-head { padding: 9px 10px; }
+      .col-severity { width: 66px; } .col-case { width: 142px; } .col-verdict { width: 98px; }
+      td, th { padding: 8px; } .inspector { padding: 10px; }
+      .grid2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 520px) {
+      .brand-title { font-size: 12px; } .brand-sub { font-size: 10px; } .live { font-size: 9px; }
+      .panel-head > span:last-child { font-size: 10px; }
+      .col-severity, .severity-cell { display: none; }
+      .col-case { width: 118px; } .col-verdict { width: 84px; }
+      .case-button { font-size: 10px; } .cell-sub { font-size: 9px; }
+      .rule-name { font-size: 11px; -webkit-line-clamp: 2; } .badge { font-size: 9px; padding: 3px 5px; }
+      td, th { padding: 7px 6px; }
+      .insp-head { gap: 6px; } .insp-id { font-size: 12px; }
+    }
   </style>
 </head>
 <body>
@@ -116,31 +175,33 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <input type="text" id="search-input" aria-label="Search incidents" placeholder="Case ID, host, IP, user, rule" oninput="handleSearch()">
       </label>
       <div class="pills">
-        <button class="pill active" data-filter="All" onclick="setFilter('All')">All</button>
-        <button class="pill" data-filter="Critical TP" onclick="setFilter('Critical TP')">Critical TP</button>
-        <button class="pill" data-filter="Suspicious / Review" onclick="setFilter('Suspicious / Review')">Needs review</button>
-        <button class="pill" data-filter="Benign/FP" onclick="setFilter('Benign/FP')">Benign / FP</button>
+        <button class="pill active" aria-pressed="true" data-filter="All" onclick="setFilter('All')">All</button>
+        <button class="pill" aria-pressed="false" data-filter="Critical TP" onclick="setFilter('Critical TP')">Critical TP</button>
+        <button class="pill" aria-pressed="false" data-filter="Suspicious / Review" onclick="setFilter('Suspicious / Review')">Needs review</button>
+        <button class="pill" aria-pressed="false" data-filter="Benign/FP" onclick="setFilter('Benign/FP')">Benign / FP</button>
       </div>
       <button class="sync" onclick="location.reload()">Sync DB</button>
     </section>
 
     <section class="workspace">
 
-      <div class="panel">
+      <div class="panel feed">
         <div class="panel-head">
-          <span>Triage Feed (<span id="visible-count">__METRIC_TOTAL__</span>)</span>
+          <span>Triage feed <span id="visible-count" aria-live="polite">__METRIC_TOTAL__</span></span>
           <span>Click a row to inspect</span>
         </div>
         <div class="scroll-x">
-          <table>
+          <table aria-label="Security incidents">
+            <colgroup><col class="col-severity"><col class="col-case"><col><col class="col-verdict"></colgroup>
             <thead>
-              <tr><th>Severity</th><th>Case ID</th><th>Time</th><th>Host</th><th>Rule</th><th>Verdict</th></tr>
+              <tr><th class="severity-cell" scope="col">Level</th><th scope="col">Incident / time</th><th scope="col">Rule / host</th><th scope="col">Verdict</th></tr>
             </thead>
             <tbody id="incidents-tbody">
 __TABLE_ROWS__
             </tbody>
           </table>
         </div>
+        <div class="empty-state" id="no-results" hidden><strong>No matching incidents</strong>Try another search or filter.</div>
       </div>
 
       <div class="panel inspector" id="inspector-card">
@@ -160,8 +221,8 @@ __TABLE_ROWS__
         </div>
 
         <div class="report">
-          <div class="report-title">AI Analyst Investigation Notes</div>
-          <div class="report-text" id="insp-details">__INITIAL_DETAILS__</div>
+          <div class="report-head"><div class="report-title">AI Analyst Investigation Notes</div><button class="report-toggle" id="report-toggle" onclick="toggleReportView()" aria-pressed="false">Raw report</button></div>
+          <div class="report-text raw" id="insp-details" tabindex="0" role="region" aria-label="Investigation report">__INITIAL_DETAILS__</div>
         </div>
 
         <div class="foot">
@@ -169,6 +230,7 @@ __TABLE_ROWS__
           <span>Fallback: <span id="insp-fallback">__INITIAL_FALLBACK__</span></span>
         </div>
       </div>
+      <div class="panel empty-state" id="inspector-empty" hidden><strong>No incident selected</strong>Select an incident from the triage feed to read its report.</div>
 
     </section>
   </main>
@@ -191,9 +253,91 @@ __TABLE_ROWS__
       return 'badge-susp';
     }
 
+    let rawReport = false;
+    let selectedIndex = allIncidents.length ? 0 : -1;
+
+    // Only create text nodes and a small set of formatting elements. Reports
+    // contain untrusted alert/model text; never interpret their HTML or links.
+    function appendReportInline(parent, text) {
+      const pieces = text.split(/(`[^`]+`|\*\*[^*]+\*\*)/g);
+      pieces.forEach(piece => {
+        if (piece.startsWith('`') && piece.endsWith('`') && piece.length > 2) {
+          const code = document.createElement('code');
+          code.textContent = piece.slice(1, -1);
+          parent.appendChild(code);
+        } else if (piece.startsWith('**') && piece.endsWith('**') && piece.length > 4) {
+          const strong = document.createElement('strong');
+          strong.textContent = piece.slice(2, -2);
+          parent.appendChild(strong);
+        } else {
+          parent.appendChild(document.createTextNode(piece));
+        }
+      });
+    }
+
+    function renderReport(text) {
+      const target = document.getElementById('insp-details');
+      const source = String(text || 'No investigation notes recorded.');
+      target.replaceChildren();
+      target.classList.toggle('raw', rawReport);
+      document.getElementById('report-toggle').textContent = rawReport ? 'Formatted report' : 'Raw report';
+      document.getElementById('report-toggle').setAttribute('aria-pressed', String(rawReport));
+      if (rawReport) {
+        target.textContent = source;
+      } else {
+        let list = null;
+        let code = null;
+        for (const line of source.replace(/\r\n?/g, '\n').split('\n')) {
+          if (line.trim().startsWith('```')) {
+            list = null;
+            if (code) { code = null; } else {
+              const pre = document.createElement('pre');
+              code = document.createElement('code');
+              pre.appendChild(code);
+              target.appendChild(pre);
+            }
+            continue;
+          }
+          if (code) { code.textContent += line + '\n'; continue; }
+          const trimmed = line.trim();
+          if (!trimmed) { list = null; continue; }
+          const heading = trimmed.match(/^#{1,6}\s+(.+)$/);
+          const bullet = trimmed.match(/^(?:[-*+]\s+|\d+[.)]\s+)(.+)$/);
+          if (bullet) {
+            const ordered = /^\d/.test(trimmed);
+            const tag = ordered ? 'OL' : 'UL';
+            if (!list || list.tagName !== tag) {
+              list = document.createElement(tag.toLowerCase());
+              if (ordered) list.start = parseInt(trimmed, 10);
+              target.appendChild(list);
+            }
+            const li = document.createElement('li');
+            appendReportInline(li, bullet[1]);
+            list.appendChild(li);
+            continue;
+          }
+          list = null;
+          const node = document.createElement(heading ? 'h3' : (/^([-*_])\1{2,}$/.test(trimmed) ? 'hr' : 'p'));
+          if (node.tagName !== 'HR') appendReportInline(node, heading ? heading[1] : trimmed);
+          target.appendChild(node);
+        }
+      }
+      target.scrollTop = 0;
+    }
+
+    function toggleReportView() {
+      rawReport = !rawReport;
+      renderReport(allIncidents[selectedIndex]?.details);
+    }
+
     function selectIncidentByIndex(idx) {
       const item = allIncidents[idx];
       if (!item) return;
+      selectedIndex = idx;
+      document.getElementById("inspector-card").hidden = false;
+      document.getElementById("inspector-empty").hidden = true;
+      document.querySelectorAll(".case-button").forEach(button => button.setAttribute("aria-pressed", "false"));
+      document.querySelector("#row-" + idx + " .case-button").setAttribute("aria-pressed", "true");
 
       document.querySelectorAll('#incidents-tbody tr').forEach(tr => tr.classList.remove('selected'));
       const row = document.getElementById('row-' + idx);
@@ -207,7 +351,7 @@ __TABLE_ROWS__
       document.getElementById('insp-src').innerText = item.source_ip || "N/A";
       document.getElementById('insp-user').innerText = item.user || "N/A";
       document.getElementById('insp-containment').innerText = item.containment || "Not executed";
-      document.getElementById('insp-details').innerText = item.details || "No investigation notes recorded.";
+      renderReport(item.details);
       document.getElementById('insp-provider').innerText = item.llm_provider || "unknown";
       document.getElementById('insp-model').innerText = item.llm_model || "unknown";
       const fb = item.fallback_used === true ? "Enabled" : (item.fallback_used === false ? "None" : "N/A");
@@ -218,6 +362,7 @@ __TABLE_ROWS__
       currentFilter = filter;
       document.querySelectorAll('.pill').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.filter === filter);
+        btn.setAttribute("aria-pressed", String(btn.dataset.filter === filter));
       });
       applyFilters();
     }
@@ -229,6 +374,7 @@ __TABLE_ROWS__
 
     function applyFilters() {
       let count = 0;
+      const visible = [];
       allIncidents.forEach((inc, idx) => {
         const row = document.getElementById('row-' + idx);
         if (!row) return;
@@ -237,10 +383,14 @@ __TABLE_ROWS__
           (currentFilter === "Benign/FP" && inc.verdict.includes("Benign"));
         const blob = (inc.case_id + " " + inc.host_agent + " " + inc.source_ip + " " + inc.rule_name + " " + inc.user).toLowerCase();
         const matchesSearch = !searchQuery || blob.includes(searchQuery);
-        if (matchesFilter && matchesSearch) { row.style.display = ""; count++; }
+        if (matchesFilter && matchesSearch) { row.style.display = ""; count++; visible.push(idx); }
         else { row.style.display = "none"; }
       });
       document.getElementById('visible-count').innerText = count;
+      document.getElementById('no-results').hidden = count > 0 || allIncidents.length === 0;
+      document.getElementById('inspector-card').hidden = count === 0;
+      document.getElementById('inspector-empty').hidden = count > 0;
+      if (count && !visible.includes(selectedIndex)) selectIncidentByIndex(visible[0]);
     }
 
     function connectWS() {
@@ -252,6 +402,8 @@ __TABLE_ROWS__
       };
       ws.onclose = () => setTimeout(connectWS, 3000);
     }
+    renderReport(allIncidents[0]?.details);
+    applyFilters();
     connectWS();
   </script>
 </body>
@@ -285,18 +437,22 @@ def render_dashboard(incidents):
     for i, inc in enumerate(incidents):
         v = inc["verdict"]
         selected_cls = "selected" if i == 0 else ""
+        case_id = html.escape(str(inc["case_id"]), quote=True)
+        rule = html.escape(str(inc["rule_name"]), quote=True)
+        host = html.escape(str(inc["host_agent"]), quote=True)
         rows.append(
             f'<tr class="{selected_cls}" id="row-{i}" onclick="selectIncidentByIndex({i})">'
-            f'<td>{severity_cell(inc["level"])}</td>'
-            f'<td class="mono" style="font-weight:600;">{html.escape(str(inc["case_id"]))}</td>'
-            f'<td class="mono" style="color:#8A97AB;">{html.escape(str(inc["time"]))}</td>'
-            f'<td class="mono">{html.escape(str(inc["host_agent"]))}</td>'
-            f'<td class="rule-cell">{html.escape(str(inc["rule_name"]))}</td>'
+            f'<td class="severity-cell">{severity_cell(inc["level"])}</td>'
+            f'<td><button class="case-button mono" title="{case_id}" aria-label="Inspect {case_id}" '
+            f'aria-pressed="{str(i == 0).lower()}">{case_id}</button>'
+            f'<span class="cell-sub mono">{html.escape(str(inc["time"]))}</span></td>'
+            f'<td><span class="rule-name" title="{rule}">{rule}</span>'
+            f'<span class="cell-sub mono" title="Host: {host}">{host}</span></td>'
             f'<td><span class="badge {verdict_badge_class(v)}">{html.escape(v)}</span></td>'
             f'</tr>'
         )
 
-    rows_str = "\n".join(rows) if rows else '<tr><td colspan="6" style="text-align:center;color:#8A97AB;padding:20px;">No incidents recorded</td></tr>'
+    rows_str = "\n".join(rows) if rows else '<tr><td colspan="4" class="empty-state">No incidents recorded</td></tr>'
 
     first = incidents[0] if incidents else {}
     first_v = first.get("verdict", "Suspicious / Review")
