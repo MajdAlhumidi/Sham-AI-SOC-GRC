@@ -73,11 +73,16 @@ class HistoricalMemoryTests(unittest.TestCase):
         })
         spec = importlib.util.spec_from_file_location('history_tools_test', Path(__file__).resolve().parents[1] / 'agent_tools.py')
         module = importlib.util.module_from_spec(spec)
-        with patch.dict(sys.modules, {'vector_store': vector}):
+        intel = types.ModuleType('threat_intel')
+        intel.check_ip_reputation = Mock()
+        intel.check_file_hash = Mock()
+        with patch.dict(sys.modules, {'vector_store': vector, 'threat_intel': intel}):
             spec.loader.exec_module(module)
         result = json.loads(module.search_historical_incidents('router', 2, 'Router authentication failure', 'current-alert'))
         self.assertEqual([x['incident_id'] for x in result['historical_cases']], ['INC-OLD-A', 'INC-OLD-B'])
         self.assertEqual(result['match_basis'], 'same_rule_vector_search')
         self.assertEqual(vector.search_incidents.call_args.kwargs['rule_name'], 'Router authentication failure')
+        intel.check_ip_reputation.assert_not_called()
+        intel.check_file_hash.assert_not_called()
         vector.search_incidents.side_effect = RuntimeError('database unavailable')
         self.assertEqual(json.loads(module.search_historical_incidents('router'))['status'], 'error')
