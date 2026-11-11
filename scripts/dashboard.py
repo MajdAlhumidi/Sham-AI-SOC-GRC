@@ -2,13 +2,17 @@
 import html
 import json
 from fastapi.responses import HTMLResponse
+if __package__:
+    from .grc_dashboard import GRC_STYLE, GRC_VIEW, GRC_SCRIPT
+else:
+    from grc_dashboard import GRC_STYLE, GRC_VIEW, GRC_SCRIPT
 
 HTML_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AI-Agent Dashboard</title>
+  <title>SHAM AI · SOC &amp; GRC</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -141,6 +145,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       td, th { padding: 7px 6px; }
       .insp-head { gap: 6px; } .insp-id { font-size: 12px; }
     }
+__GRC_STYLES__
   </style>
 </head>
 <body>
@@ -159,7 +164,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </div>
   </header>
 
-  <main class="layout">
+  <nav class="mode-nav" role="tablist" aria-label="Dashboard workspace">
+    <button class="mode-tab" id="mode-soc" role="tab" aria-controls="soc-view" aria-selected="true" onclick="location.hash='soc'">SOC incidents</button>
+    <button class="mode-tab" id="mode-grc" role="tab" aria-controls="grc-view" aria-selected="false" tabindex="-1" onclick="location.hash='grc/evidence'">GRC workspace</button>
+    <button class="soc-update" id="soc-update" hidden onclick="location.reload()">New SOC data · Refresh</button>
+  </nav>
+  <main class="layout" id="soc-view" role="tabpanel" aria-labelledby="mode-soc">
+    <p class="soc-notice" id="soc-incident-notice" role="status" hidden></p>
 
     <section class="kpis">
       <div class="kpi"><div class="l">Ingested Incidents</div><div class="v" id="metric-total">__METRIC_TOTAL__</div></div>
@@ -234,6 +245,7 @@ __TABLE_ROWS__
 
     </section>
   </main>
+__GRC_VIEW__
 
   <script>
     const allIncidents = __JSON_DATA__;
@@ -398,16 +410,43 @@ __TABLE_ROWS__
       const ws = new WebSocket(proto + '//' + window.location.host + '/ws');
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
-        if (data.type === "NEW_ALERT") { location.reload(); }
+        if (data.type === "NEW_ALERT") {
+          if (!document.getElementById('grc-view').hidden) document.getElementById('soc-update').hidden=false;
+          else location.reload();
+        }
       };
       ws.onclose = () => setTimeout(connectWS, 3000);
     }
+__GRC_SCRIPT__
+    function routeWorkspace() {
+      const hash=location.hash.slice(1), isGrc=hash==='grc'||hash.startsWith('grc/');
+      document.getElementById('soc-view').hidden=isGrc;
+      document.getElementById('grc-view').hidden=!isGrc;
+      ['soc','grc'].forEach(mode=>{const active=(mode==='grc')===isGrc,node=document.getElementById('mode-'+mode);node.setAttribute('aria-selected',String(active));node.tabIndex=active?0:-1;});
+      if(isGrc){const [section,query='']=hash.replace(/^grc\/?/,'').split('?');window.showGrcRoute(section||'evidence',(new URLSearchParams(query).get('record')||'').slice(0,128));return;}
+      const notice=document.getElementById('soc-incident-notice');notice.hidden=true;
+      if(hash.startsWith('soc/incident/')){
+        let id;try{id=decodeURIComponent(hash.slice(13));}catch{return;}
+        document.getElementById('search-input').value=id;searchQuery=id.toLowerCase();setFilter('All');
+        const index=allIncidents.findIndex(x=>x.case_id===id);
+        if(index>=0){selectIncidentByIndex(index);document.getElementById('insp-details').focus();}
+        else{notice.textContent='This incident is no longer available in SOC. Related evidence may still be retained in GRC.';notice.hidden=false;}
+      }
+    }
+    window.addEventListener('hashchange',routeWorkspace);
+    document.querySelector('.mode-nav').addEventListener('keydown',event=>{
+      if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)||!document.activeElement.classList.contains('mode-tab'))return;
+      event.preventDefault();const target=event.key==='Home'?'mode-soc':event.key==='End'?'mode-grc':document.activeElement.id==='mode-soc'?'mode-grc':'mode-soc';document.getElementById(target).focus();document.getElementById(target).click();
+    });
     renderReport(allIncidents[0]?.details);
     applyFilters();
+    routeWorkspace();
     connectWS();
   </script>
 </body>
 </html>"""
+
+HTML_TEMPLATE = HTML_TEMPLATE.replace('__GRC_STYLES__', GRC_STYLE).replace('__GRC_VIEW__', GRC_VIEW).replace('__GRC_SCRIPT__', GRC_SCRIPT)
 
 def verdict_badge_class(v: str) -> str:
     v = v.lower()

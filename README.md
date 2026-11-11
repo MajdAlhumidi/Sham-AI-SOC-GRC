@@ -24,7 +24,7 @@ The project brings together AWS cloud telemetry and on-premises MikroTik monitor
 | Evidence collection | Queries Wazuh Indexer for related alerts, process events, and network activity. |
 | Threat intelligence | Optional AbuseIPDB, VirusTotal, and GreyNoise lookups with explicit provider availability. |
 | Reporting | Produces structured investigation reports, checks required sections, and enforces `NOT_EXECUTED` containment status. |
-| Analyst dashboard | FastAPI and WebSocket interface for incident reports, classifications, and recorded execution status. |
+| Analyst dashboard | SOC incident investigations and a protected GRC workspace with searchable records and linked incidents. |
 | Human review | Protected API records `accepted`, `corrected`, or `escalated` decisions separately from AI suggestions. |
 | GRC foundation | SQLite-backed risk register, control catalogue, evidence, approval records, and audit events. |
 | SOC-to-GRC connection | Opt-in synchronization of incident provenance and human decisions into GRC evidence. |
@@ -195,7 +195,15 @@ Synchronization is **disabled by default**. Identical bridge events are deduplic
 
 If synchronization fails, the original incident or review remains saved. The failure is reported in agent logs or the review response's `grc_sync` field. There is no automatic retry queue; failed mirrors require reconciliation from the retained source.
 
-These links do not automatically set risk ratings, mark controls implemented, or authorize a response. The control catalogue is an internal baseline, not a validated ISO 27001 or NIST mapping. GRC currently provides APIs rather than a dedicated graphical dashboard.
+These links do not automatically set risk ratings, mark controls implemented, or authorize a response. The control catalogue is an internal baseline, not a validated ISO 27001 or NIST mapping.
+
+### GRC dashboard tab
+
+Open the existing Agent dashboard, select **GRC workspace**, and enter the API service's `SOC_GRC_API_TOKEN`. The direct route is `/#grc/evidence` on the dashboard host. Use the same protected connection as the SOC dashboard; the GitHub Pages website does not serve live incident or GRC data.
+
+The tab provides **Risks, Controls, Evidence, Approvals, and Audit trail**, with summary counts, server-side search, status/source filters, pagination, record details, and links to related SOC investigations. It displays existing records only; creation, edits and approval decisions remain available through the existing authenticated APIs. If a SOC incident was removed, its retained GRC evidence remains visible and the link explains that the source incident is unavailable.
+
+The token stays in page memory and is cleared by **Lock GRC** or a page reload. It is never embedded in the page, URL or browser storage. New SOC alerts show a refresh notice while GRC is open, preserving the current GRC session. The control implementation indicator is not a compliance certification.
 
 See the [GRC module guide](scripts/grc/README.md) for endpoints, request examples, scoring bands, and storage details.
 
@@ -323,7 +331,8 @@ The suite covers investigation boundaries, native tool-result feedback, malforme
 - [x] Automated checks on `main`
 - [ ] Measured comparison of manual and AI-assisted triage
 - [ ] Curated feedback from reviewed incidents into trusted memory
-- [ ] Dedicated GRC interface and stronger individual user/role management
+- [x] GRC dashboard tab with search, pagination and linked incident investigations
+- [ ] Individual GRC user identities and role-based access management
 - [ ] Validated mappings to selected governance and compliance frameworks
 - [ ] Reproducible deployment packaging and broader offline validation
 

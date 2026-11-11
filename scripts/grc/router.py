@@ -29,6 +29,7 @@ from .schemas import (
     WazuhEvidenceInput,
 )
 from .scoring import calculate_risk_score
+from .workspace import router as workspace_router
 
 def require_grc_token(x_grc_token: Optional[str] = Header(default=None, alias="X-GRC-Token")):
     """Protect every GRC route, including evidence and human approvals."""
@@ -49,6 +50,7 @@ router = APIRouter(
     prefix="/grc", tags=["GRC"],
     dependencies=[Depends(require_grc_token)], lifespan=grc_lifespan,
 )
+router.include_router(workspace_router)
 
 
 def _payload_dict(payload):

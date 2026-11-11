@@ -1,0 +1,38 @@
+<main class="grc-view" id="grc-view" role="tabpanel" aria-labelledby="mode-grc" hidden>
+  <div class="grc-heading">
+    <div><div class="grc-eyebrow">SHAM AI / GOVERNANCE WORKSPACE</div><h1>Governance, risk &amp; compliance</h1><p>Trace decisions from security incidents to evidence and controls.</p></div>
+    <div class="grc-actions"><span class="grc-session" id="grc-session">Locked</span><button class="grc-button" id="grc-refresh" hidden>Refresh</button><button class="grc-button" id="grc-lock" hidden>Lock GRC</button></div>
+  </div>
+  <p id="grc-message" class="grc-message" role="status" aria-live="polite" hidden></p>
+  <section class="grc-unlock panel" id="grc-unlock">
+    <div class="grc-lock-icon" aria-hidden="true">⌑</div><div class="grc-eyebrow">PROTECTED WORKSPACE</div>
+    <h2>Unlock your GRC records</h2><p>Use your GRC access token to view risks, controls, evidence, approvals and the audit trail.</p>
+    <form id="grc-access-form"><label for="grc-token">GRC access token</label><div class="grc-token-row"><input id="grc-token" type="password" autocomplete="off" spellcheck="false" required placeholder="Enter access token"><button class="grc-button primary" id="grc-unlock-button" type="submit">Unlock GRC</button></div></form>
+    <small>The token stays in this page's memory. Locking or reloading the page clears it.</small>
+  </section>
+  <div class="grc-content" id="grc-content" hidden>
+    <section class="grc-metrics" aria-label="GRC overview">
+      <div class="grc-metric"><span>Open risks</span><strong id="grc-kpi-risks">—</strong><small>Registered risks requiring treatment</small></div>
+      <div class="grc-metric"><span>Controls implemented</span><strong id="grc-kpi-controls">—</strong><div class="grc-progress"><i id="grc-progress-bar"></i></div><small id="grc-assessment-note">Assessment required</small></div>
+      <div class="grc-metric"><span>Evidence records</span><strong id="grc-kpi-evidence">—</strong><small>Incident provenance &amp; review records</small></div>
+      <div class="grc-metric"><span>Pending approvals</span><strong id="grc-kpi-approvals">—</strong><small>Human decisions awaiting review</small></div>
+    </section>
+    <div class="grc-nav" role="tablist" aria-label="GRC sections">
+      <button id="grc-tab-risks" role="tab" aria-controls="grc-records" data-grc-section="risks">Risks <span data-grc-count="risks">—</span></button>
+      <button id="grc-tab-controls" role="tab" aria-controls="grc-records" data-grc-section="controls">Controls <span data-grc-count="controls">—</span></button>
+      <button id="grc-tab-evidence" role="tab" aria-controls="grc-records" data-grc-section="evidence">Evidence <span data-grc-count="evidence">—</span></button>
+      <button id="grc-tab-approvals" role="tab" aria-controls="grc-records" data-grc-section="approvals">Approvals <span data-grc-count="approvals">—</span></button>
+      <button id="grc-tab-audit" role="tab" aria-controls="grc-records" data-grc-section="audit">Audit trail <span data-grc-count="audit">—</span></button>
+    </div>
+    <section class="grc-records" id="grc-records" role="tabpanel" aria-labelledby="grc-tab-risks">
+      <div class="grc-list panel">
+        <div class="grc-list-title"><div><h2 id="grc-list-title">Risk register</h2><span id="grc-list-caption">Likelihood, impact and treatment status</span></div><span class="grc-readonly">VIEW ONLY</span></div>
+        <div class="grc-filters"><label class="grc-search-label"><span class="sr-only">Search GRC records</span><input id="grc-search" type="search" placeholder="Search all records…" maxlength="200"></label><label><span class="sr-only">Filter GRC records</span><select id="grc-filter"><option value="">All statuses</option></select></label></div>
+        <div class="grc-table-scroll" id="grc-table-scroll"><table id="grc-table" aria-label="GRC records"><thead id="grc-table-head"></thead><tbody id="grc-table-body"></tbody></table><div id="grc-list-empty" class="grc-empty" hidden></div></div>
+        <div class="grc-pagination"><span id="grc-page-label" aria-live="polite">—</span><div><button class="grc-button" id="grc-prev" aria-label="Previous records page">Previous</button><button class="grc-button" id="grc-next" aria-label="Next records page">Next</button></div></div>
+      </div>
+      <aside class="grc-detail panel" id="grc-detail" aria-label="Selected GRC record"><div class="grc-empty">Select a record to inspect its details and related incidents.</div></aside>
+    </section>
+    <footer class="grc-footer"><span>Internal control implementation indicator · not a compliance certification</span><span id="grc-sync-time">—</span></footer>
+  </div>
+</main>

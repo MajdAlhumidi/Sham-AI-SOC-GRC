@@ -31,6 +31,37 @@ Set GRC_DB_PATH to move the database, for example:
 
 The data directory and SQLite files must be backed up and excluded from Git.
 
+## Dashboard access
+
+The existing Agent dashboard includes a **GRC workspace** tab at
+`/#grc/evidence`. Unlock it using the API service's `SOC_GRC_API_TOKEN` over
+the deployment's protected connection. The browser sends `X-GRC-Token` only
+to the same-origin GRC workspace API. Locking or reloading clears the token
+and protected records from page memory; no token is saved in browser storage.
+
+The five sections display risks, controls, evidence, approvals and audit
+events. Search and filters query the entire SQLite dataset, with 40 records
+per page. Record details include evidence metadata, risk/control references,
+decision notes, audit before/after snapshots, and paginated SOC incident
+links. Retained evidence stays available when the original SOC incident is
+no longer in ChromaDB; opening that link reports the missing source.
+
+This tab is view-only. Existing write APIs remain the way to create risks,
+assess controls or record human approval decisions. Empty registers are
+shown honestly; incident evidence does not create risks or approvals.
+The shared token does not establish individual user identities or roles.
+
+Read endpoints used by the tab (all require the existing GRC token and
+return `Cache-Control: no-store`):
+
+- `GET /api/grc/workspace/summary`
+- `GET /api/grc/workspace/{section}?q=...&status=...&offset=0&limit=40`
+- `GET /api/grc/workspace/{section}/{id}?incident_offset=0&incident_limit=12`
+
+Sections are `risks`, `controls`, `evidence`, `approvals`, and `audit`.
+List limits are capped at 100. Search treats wildcard characters literally.
+The original API endpoints and response shapes are preserved.
+
 ## API integration
 
 The router is mounted by scripts/api_server.py under /api/grc.
