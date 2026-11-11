@@ -18,6 +18,7 @@ class IncidentRecord(BaseModel):
     alert_summary: str
     source_ip: str
     destination_ip: str
+    target_host: str = ""
     user_account: str
     raw_logs: str
     rule_level: int = 0
@@ -51,6 +52,7 @@ class IncidentRecord(BaseModel):
             "user_account": self.user_account,
             "source_ip": self.source_ip,
             "destination_ip": self.destination_ip,
+            "target_host": self.target_host,
             "rule_level": self.rule_level,
             "containment_status": self.containment_status,
             "llm_provider": self.llm_provider,

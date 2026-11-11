@@ -8,6 +8,7 @@ import ipaddress
 import requests
 from datetime import datetime
 from schema import IncidentRecord
+from alert_context import resolve_alert_asset, rule_mitre_ids
 from vector_store import store_incidents
 from grc.integration import sync_incident
 from agent_tools import (
@@ -40,8 +41,9 @@ def notify_stream(event_type: str, alert_json: dict, report_text: str = "", clas
             "event_type": event_type,
             "rule_level": rule.get("level", 0),
             "rule_desc": rule.get("description", "Security Alert"),
-            "target_host": agent.get("name", agent.get("ip", "Unknown Host")),
+            "target_host": resolve_alert_asset(alert_json)['name'],
             "source_ip": data.get("srcip", "N/A"),
+            "user": data.get("dstuser") or data.get("srcuser") or data.get("user") or "N/A",
             "payload": alert_json.get("full_log", ""),
             "report_text": report_text,
             "classification": classification,
@@ -139,7 +141,7 @@ def generate_fallback_report(alert_json: dict, error_msg: str) -> str:
 
     level = rule.get("level", 0)
     desc = rule.get("description", "Security Event Detected")
-    host = agent.get("name", agent.get("ip", "Unknown Host"))
+    host = resolve_alert_asset(alert_json)['name']
 
     full_log = (
         alert_json.get("full_log") or
@@ -184,22 +186,14 @@ def generate_fallback_report(alert_json: dict, error_msg: str) -> str:
             except Exception:
                 decoded_payload = "Encrypted Base64 detected (decoding failed)"
 
-    mitre_list = []
+    mitre_list = [
+        f"* **{technique}** (rule-supplied mapping) [A1]. Wazuh supplied this detection mapping; it does not confirm an attack or compromise."
+        for technique in rule_mitre_ids(rule)
+    ]
     log_lower = (full_log + " " + desc).lower()
-    powershell_execution_markers = ("-enc", "encodedcommand", "-command", "invoke-expression", "iex ")
-    if "powershell" in log_lower and any(term in log_lower for term in powershell_execution_markers):
-        mitre_list.append("* **T1059.001 – Command and Scripting Interpreter: PowerShell**: PowerShell command execution indicators are present; validate intent and surrounding behavior.")
-    if any(term in log_lower for term in ("-enc", "encodedcommand", "base64", "obfuscated")):
-        mitre_list.append("* **T1027 – Obfuscated Files or Information**: Encoding or obfuscation indicators are present; confirm they are not benign tooling.")
-    if "credential stuffing" in log_lower:
-        mitre_list.append("* **T1110.004 – Credential Stuffing**: Credential-stuffing activity is explicitly described; validate against event evidence.")
-    elif any(term in log_lower for term in ("brute force", "repeated failed login", "multiple failed login", "failed logins", "multiple authentication failures")):
-        mitre_list.append("* **T1110 – Brute Force**: Repeated authentication-failure behavior is described; validate counts and context before confirming the technique.")
-    if any(term in log_lower for term in ("valid account abused", "compromised account", "unauthorized successful login", "unusual successful login", "valid account used in suspicious")):
-        mitre_list.append("* **T1078 – Valid Accounts**: Evidence suggests possible abuse of a valid account; verify the underlying authentication and authorization context.")
 
     if not mitre_list:
-        mitre_list.append("* No technique mapped: the available log text is insufficient to support a specific MITRE ATT&CK technique.")
+        mitre_list.append("* No structured rule mapping was supplied; no MITRE technique is asserted.")
 
     ip_context = "Public WAN Address"
     if src_ip != "N/A":
@@ -386,7 +380,8 @@ def _append_case_result(report_text: str, result: dict) -> str:
 def investigate_alert(alert_json: dict):
     rule_desc = alert_json.get("rule", {}).get("description", "Unknown Alert")
     rule_level = alert_json.get("rule", {}).get("level", 0)
-    agent_name = alert_json.get("agent", {}).get("name", alert_json.get("agent", {}).get("ip", "Unknown Host"))
+    asset = resolve_alert_asset(alert_json)
+    agent_name = asset['name']
     case_id = f"INC-{datetime.utcnow().strftime('%Y%m%d')}-{uuid.uuid4().hex.upper()}"
 
     print("\n" + "="*60, flush=True)
@@ -481,7 +476,8 @@ def investigate_alert(alert_json: dict):
             classification=classification,
             alert_summary=f"Automated Tier-2 triage for {rule_desc} on {agent_name}",
             source_ip=data.get("srcip") or data.get("src_ip") or "N/A",
-            destination_ip=data.get("dstip") or alert_json.get("agent", {}).get("ip", "N/A"),
+            destination_ip=asset['ip'],
+            target_host=asset['name'],
             user_account=data.get("dstuser") or data.get("srcuser") or data.get("user") or "N/A",
             raw_logs=alert_json.get("full_log", str(alert_json)),
             analyst_notes=report_text.strip(),

@@ -58,6 +58,8 @@ def sync_incident(record, alert: dict) -> dict:
                     "incident_id": incident_id, "alert_id": alert.get("id"),
                     "rule_id": rule.get("id"), "rule_level": rule.get("level"),
                     "agent_id": agent.get("id"), "agent_name": agent.get("name"),
+                    "target_host": data.get("target_host", ""),
+                    "target_ip": data.get("destination_ip", "N/A"),
                     "timestamp": alert.get("timestamp"),
                 },
             },

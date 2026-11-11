@@ -9,11 +9,13 @@ from pydantic import BaseModel, Field
 
 # Support both "python scripts/api_server.py" and "uvicorn scripts.api_server:app".
 if __package__:
+    from .alert_context import incident_target_host
     from .dashboard import render_dashboard
     from .review_audit import append_human_review
     from .grc.integration import sync_human_review
     from .grc.router import router as grc_router
 else:
+    from alert_context import incident_target_host
     from dashboard import render_dashboard
     from review_audit import append_human_review
     from grc.integration import sync_human_review
@@ -54,7 +56,7 @@ def get_real_incidents_from_chroma() -> List[Dict[str, Any]]:
             }
             verdict = verdict_by_class.get(cls, "Suspicious / Review")
 
-            host = meta.get("destination_ip", "local-agent")
+            host = incident_target_host(meta)
             src_ip = meta.get("source_ip", "N/A")
             user = meta.get("user_account", "N/A")
             rule = meta.get("rule_name", "Security Alert")
@@ -118,6 +120,7 @@ class ExternalAlertInput(BaseModel):
     rule_desc: str = ""
     target_host: str = ""
     source_ip: str = ""
+    user: str = "N/A"
     payload: str = ""
     report_text: str = ""
     classification: str = ""
@@ -174,7 +177,7 @@ async def ingest_real_agent_alert(alert: ExternalAlertInput):
         "containment": containment_label,
         "details": alert.report_text,
         "source_ip": alert.source_ip,
-        "user": "N/A",
+        "user": alert.user,
         "llm_provider": alert.llm_provider,
         "llm_model": alert.llm_model,
         "fallback_used": alert.fallback_used

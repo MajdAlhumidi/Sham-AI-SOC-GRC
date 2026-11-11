@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 import investigation_agent as agent
 from ollama_reporting import evidence_packet, render_assessment, validate_assessment
 from report_quality import enforce_runtime_containment_status, evaluate_report_quality
+from test_alert_context import router_alert
 
 
 def valid_assessment():
@@ -14,7 +15,7 @@ def valid_assessment():
         "classification": "SUSPICIOUS", "severity": "MEDIUM",
         "assessment": "One authentication failure is observed; the supplied evidence does not establish a compromise.",
         "findings": [{"observation": "The incoming alert records one failed authentication attempt.", "evidence": ["A1"]}],
-        "hypotheses": ["A mistyped password or unauthorized login attempt could explain the event."],
+        "hypotheses": [],
         "mitre": [], "limitations": ["No successful authentication or execution evidence is supplied."],
         "recommendations": ["Review authentication events around the reported failure.", "Confirm the expected user and originating host with the system owner."],
     }
@@ -34,6 +35,38 @@ def tool(name="search_related_agent_logs", **args):
 
 
 class OllamaReportTests(unittest.TestCase):
+    def test_mikrotik_report_uses_router_and_preserves_omitted_model_mapping(self):
+        alert = router_alert()
+        packet = evidence_packet(alert, {})
+        assessment = validate_assessment(json.dumps(valid_assessment()), packet)
+        self.assertEqual(assessment.mitre, [])
+        report = render_assessment(assessment, alert, {}, packet)
+        self.assertIn('**Affected Host**: `MOKROTIK-STAR`', report)
+        self.assertIn('**Target Address**: `10.8.0.2`', report)
+        self.assertIn('**T1110** (rule-supplied mapping) [A1]', report)
+        self.assertIn('does not confirm an attack or compromise', report)
+        self.assertNotIn('No structured rule mapping', report)
+        self.assertNotIn('Hypotheses', report)
+
+    def test_large_rule_metadata_does_not_remove_asset_or_mitre_evidence(self):
+        from ollama_reporting import supplied_techniques
+        alert = router_alert()
+        alert['rule'] = {**{f'compliance_{i}': 'x' * 100 for i in range(30)}, **alert['rule']}
+        alert['rule']['description'] = 'large description ' * 100
+        packet = evidence_packet(alert, {})
+        self.assertEqual(supplied_techniques(packet), {'T1110': {'A1'}})
+        self.assertEqual(packet['A1']['value']['affected_asset']['name'], 'MOKROTIK-STAR')
+        self.assertEqual(packet['A1']['value']['location'], '10.8.0.2')
+
+    def test_unsupported_free_text_hypothesis_is_rejected(self):
+        from ollama_reporting import assessment_schema
+        packet = evidence_packet(router_alert(), {})
+        data = valid_assessment()
+        data['hypotheses'] = ['The failed login may be related to a larger security incident.']
+        self.assertEqual(assessment_schema(packet)['properties']['hypotheses']['maxItems'], 0)
+        with self.assertRaises(ValueError):
+            validate_assessment(json.dumps(data), packet)
+
     def setUp(self):
         self.alert = {"agent": {"id": "000", "name": "display-name"},
                       "rule": {"description": "Single failed SSH login", "level": 7},

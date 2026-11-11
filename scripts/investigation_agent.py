@@ -374,12 +374,13 @@ Empty/error/blocked tool results are limitations, never proof an asset is clean 
 Historical labels are unverified context. Do not claim a provider was checked without its actual result.
 A no_match/empty result means the tool ran successfully but returned no matching records; it does NOT mean the tool was unavailable.
 Distinguish no matches in the queried time window from an unqueried service or a failed query.
-For a lone failed login, plausible explanations are mistyped credentials or an unauthorized attempt.
-Do not speculate about additional attacker activities without corresponding observed evidence. Prefer no hypothesis to unsupported speculation.
+For a lone failed login, state that its cause is not established by the available evidence.
+Do not speculate about additional attacker activities or invent possible causes. The hypotheses list must be empty.
+Use affected_asset as the target device; agent identifies the Wazuh collector for remote Syslog.
 Use SUSPICIOUS when evidence is insufficient. Include concrete observations, evidence gaps and next steps.
-MITRE must be empty unless a technique ID is present in structured rule.mitre.id evidence; never invent or infer an ID. Hypotheses must be separated from observed findings.
+MITRE must be empty unless a technique ID is present in structured rule.mitre.id evidence; never invent or infer an ID. The runtime renders all supplied mappings independently.
 Do not claim executed containment or case creation. These statuses are owned by the runtime.
-Be concise: at most three findings, two hypotheses, two limitations, and three recommendations.
+Be concise: at most three evidence-backed findings, zero hypotheses, two limitations, and three recommendations.
 """
     messages = [{"role": "system", "content": system}, {"role": "user", "content": json.dumps({
         "evidence": packet, "output_schema": schema,

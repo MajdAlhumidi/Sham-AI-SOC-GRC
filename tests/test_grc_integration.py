@@ -108,7 +108,7 @@ class GRCIntegrationTests(unittest.TestCase):
         self.assertEqual(assessment["metadata"]["llm_provider"], "ollama")
 
     def test_real_soc_hook_and_human_review_preserve_separate_decisions(self):
-        from scripts import investigation_agent, report_quality, schema
+        from scripts import investigation_agent, report_quality, schema, alert_context
 
         vector = types.ModuleType("vector_store")
         vector.store_incidents = Mock()
@@ -121,6 +121,7 @@ class GRCIntegrationTests(unittest.TestCase):
         aliases = {
             "schema": schema, "vector_store": vector, "agent_tools": agent_tools,
             "investigation_agent": investigation_agent, "report_quality": report_quality,
+            "alert_context": alert_context,
             "grc": scripts.grc, "grc.integration": scripts.grc.integration,
         }
         spec = importlib.util.spec_from_file_location(
@@ -129,6 +130,27 @@ class GRCIntegrationTests(unittest.TestCase):
         soc = importlib.util.module_from_spec(spec)
         with patch.dict(sys.modules, aliases):
             spec.loader.exec_module(soc)
+        self.alert.update({
+            'agent': {'id': '000', 'name': 'wazuh-collector'}, 'location': '10.8.0.2',
+            'decoder': {'name': 'sham-mikrotik-native-auth'},
+            'data': {'srcip': '192.0.2.10', 'dstuser': 'admin', 'protocol': 'winbox'},
+            'full_log': 'system,error,critical MOKROTIK-STAR: login failure for user admin from 192.0.2.10 via winbox',
+        })
+        self.alert['rule']['mitre'] = {'id': ['T1110']}
+        fallback = soc.generate_fallback_report(self.alert, 'test unavailable model')
+        self.assertIn('**Affected Host**: `MOKROTIK-STAR`', fallback)
+        self.assertIn('**T1110** (rule-supplied mapping)', fallback)
+        with patch.object(soc.requests, 'post') as notify_post:
+            soc.notify_stream('INVESTIGATION_REPORT', self.alert, REPORT, case_id='TEST')
+        payload = notify_post.call_args.kwargs['json']
+        self.assertEqual(payload['target_host'], 'MOKROTIK-STAR')
+        self.assertEqual(payload['user'], 'admin')
+        with patch('scripts.api_server.get_real_incidents_from_chroma', return_value=[]), self.client.websocket_connect('/ws') as ws:
+            ws.receive_json()
+            self.assertEqual(self.client.post('/api/broadcast', json=payload).status_code, 200)
+            live = ws.receive_json()['incident']
+            self.assertEqual(live['host_agent'], 'MOKROTIK-STAR')
+            self.assertEqual(live['user'], 'admin')
         with patch.object(soc, "generate_ollama_report", return_value=REPORT), \
              patch.object(soc, "_maybe_create_thehive_case", return_value={"status": "not_configured"}), \
              patch.object(soc, "notify_stream") as broadcast, patch("builtins.print"), \
@@ -146,7 +168,13 @@ class GRCIntegrationTests(unittest.TestCase):
         self.assertEqual(saved.to_metadata()["source_alert_id"], self.alert["id"])
         self.assertEqual(second.to_metadata()["source_alert_id"], "alert-456")
         self.assertEqual(saved.containment_status, "NOT_EXECUTED")
+        self.assertEqual(saved.target_host, 'MOKROTIK-STAR')
+        self.assertEqual(saved.to_metadata()['target_host'], 'MOKROTIK-STAR')
+        self.assertEqual(saved.destination_ip, '10.8.0.2')
         self.assertEqual(len(self.evidence()), 4)
+        wazuh_evidence = next(item for item in self.evidence() if item['source'] == 'wazuh')
+        self.assertEqual(wazuh_evidence['metadata']['target_host'], 'MOKROTIK-STAR')
+        self.assertEqual(wazuh_evidence['metadata']['agent_name'], 'wazuh-collector')
         response = self.client.post("/api/reviews", headers={"X-Review-Token": "test-review-token"}, json={
             "incident_id": saved.incident_id, "agent_classification": "suspicious",
             "decision": "corrected", "final_classification": "false_positive",

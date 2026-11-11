@@ -6,6 +6,10 @@ import re
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+if __package__:
+    from .alert_context import resolve_alert_asset, rule_mitre_ids
+else:
+    from alert_context import resolve_alert_asset, rule_mitre_ids
 
 Text = Annotated[str, Field(min_length=15, max_length=1000)]
 EvidenceRefs = Annotated[list[str], Field(min_length=1, max_length=4)]
@@ -30,7 +34,9 @@ class Assessment(BaseModel):
     severity: Literal["CRITICAL", "HIGH", "MEDIUM", "LOW"]
     assessment: Text
     findings: list[Finding] = Field(min_length=1, max_length=5)
-    hypotheses: list[Text] = Field(max_length=3)
+    # A free-text hypothesis cannot be verified from a citation alone. Require
+    # an empty list; keep uncertainty in evidence limitations and next steps.
+    hypotheses: list[Text] = Field(max_length=0)
     mitre: list[Technique] = Field(max_length=3)
     limitations: list[Text] = Field(min_length=1, max_length=5)
     recommendations: list[Text] = Field(min_length=2, max_length=5)
@@ -57,11 +63,21 @@ def compact_evidence(value, depth=0):
 
 def evidence_packet(alert, context):
     # Preserve identifiers and observed activity while bounding large alert envelopes.
-    source = {k: alert[k] for k in ("id", "timestamp", "agent", "rule", "data", "full_log") if k in alert}
+    source = {k: alert[k] for k in ("id", "timestamp", "agent", "rule", "data", "full_log", "location", "decoder", "predecoder") if k in alert}
     source = compact_evidence(source)
+    # Preserve rule mappings as structured evidence even when the original
+    # rule includes many compliance tags or a very large description.
+    rule = alert.get('rule') or {}
+    source['rule'] = {
+        'id': str(rule.get('id', ''))[:128],
+        'level': rule.get('level', 0),
+        'description': str(rule.get('description', ''))[:600],
+        'mitre': {'id': rule_mitre_ids(rule)},
+    }
+    source['affected_asset'] = resolve_alert_asset(alert)
     for key, value in list(source.items()):
         encoded = json.dumps(value, ensure_ascii=False, default=str)
-        if len(encoded) > 1200:
+        if len(encoded) > 1200 and key != 'rule':
             source[key] = {"excerpt": encoded[:1200], "truncated": True}
     packet = {"A1": {"kind": "incoming_alert", "value": source}}
     for index, item in enumerate(context.get("tool_results", []), 1):
@@ -137,9 +153,15 @@ def _line(value):
 
 def render_assessment(assessment, alert, context, packet):
     rule, agent, data = alert.get("rule") or {}, alert.get("agent") or {}, alert.get("data") or {}
+    asset = resolve_alert_asset(alert)
     findings = [f"- {_line(x.observation)} [{', '.join(x.evidence)}]" for x in assessment.findings]
-    hypotheses = [f"- {_line(x)}" for x in assessment.hypotheses] or ["- No additional hypothesis proposed."]
-    techniques = [f"- **{x.technique_id}** (rule-supplied mapping): {_line(x.rationale)} [{', '.join(x.evidence)}]" for x in assessment.mitre]
+    # Rule mappings are observed metadata. They must not disappear when the
+    # model chooses an empty MITRE list, nor become a claim of compromise.
+    techniques = [
+        f"- **{technique}** (rule-supplied mapping) [{', '.join(sorted(refs))}]. "
+        "Wazuh supplied this detection mapping; it does not confirm an attack or compromise."
+        for technique, refs in sorted(supplied_techniques(packet).items())
+    ]
     history = [f"- [{ref}] `{item['tool']}`: {item['status']}. Historical labels are context, not verified ground truth."
                for ref, item in packet.items() if item.get("tool") == "search_historical_incidents"]
     intel = [f"- [{ref}] `{item['tool']}`: {item['status']}. Provider details are in the recorded tool response."
@@ -158,12 +180,12 @@ def render_assessment(assessment, alert, context, packet):
         f"* **Classification**: **{assessment.classification}**",
         f"* **Severity Level**: **{assessment.severity}**",
         f"* **Alert Description**: {_line(rule.get('description', 'Security Alert'))}",
-        f"* **Affected Host**: `{_line(agent.get('name') or agent.get('ip') or 'Unknown')}`",
+        f"* **Affected Host**: `{_line(asset['name'])}`",
+        f"* **Target Address**: `{_line(asset['ip'])}`",
         f"* **User Context**: `{_line(data.get('dstuser') or data.get('srcuser') or data.get('user') or 'N/A')}`",
         f"* **Source Address**: `{_line(data.get('srcip') or data.get('src_ip') or 'N/A')}`",
         f"* **Assessment**: {_line(assessment.assessment)}", "",
         "### 2. Analysis & Technical Findings", *findings, "",
-        "**Hypotheses requiring verification**", *hypotheses, "",
         "**Threat intelligence**", *(intel or ["- Not checked: no reputation/hash tool call was recorded."]), "",
         "### 3. MITRE ATT&CK Mapping", *(techniques or ["- No structured rule mapping was supplied; no MITRE technique is asserted."]), "",
         "### 4. Historical Memory Context (Vector DB)",
