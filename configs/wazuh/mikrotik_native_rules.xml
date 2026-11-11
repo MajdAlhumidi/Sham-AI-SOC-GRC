@@ -1,0 +1,20 @@
+<group name="mikrotik,authentication,">
+  <rule id="100110" level="0">
+    <decoded_as>sham-mikrotik-native-auth</decoded_as>
+    <description>MikroTik native-format management authentication events.</description>
+  </rule>
+  <rule id="100111" level="7">
+    <if_sid>100110</if_sid>
+    <match>login failure for user </match>
+    <description>MikroTik: Router Authentication Failure via Winbox/SSH/Web.</description>
+    <mitre><id>T1110</id></mitre>
+    <group>authentication_failed,pci_dss_10.2.4,pci_dss_10.2.5,</group>
+  </rule>
+  <rule id="100112" level="10" frequency="5" timeframe="120">
+    <if_matched_sid>100111</if_matched_sid>
+    <same_source_ip />
+    <description>MikroTik: Repeated router login failures from the same source.</description>
+    <mitre><id>T1110.001</id></mitre>
+    <group>authentication_failures,</group>
+  </rule>
+</group>

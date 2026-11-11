@@ -1,0 +1,6 @@
+<!-- Native RouterOS syslog with topics and no RFC3164 program_name. -->
+<decoder name="sham-mikrotik-native-auth">
+  <prematch type="pcre2">^[A-Za-z]+(?:,[A-Za-z]+)*\s+MOKROTIK-STAR:\s+login failure for user\s</prematch>
+  <regex type="pcre2">login failure for user (\S+) from ([0-9a-fA-F:.]+) via (\S+)</regex>
+  <order>dstuser,srcip,protocol</order>
+</decoder>
