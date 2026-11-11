@@ -101,7 +101,11 @@ class InvestigationAgentPolicyTests(unittest.TestCase):
                 "content": "# Incident Investigation Report\nEvidence reviewed.",
             }
         }
-        post.side_effect = [tool_response, final_response]
+        report_response = Mock()
+        report_response.raise_for_status = Mock()
+        from test_ollama_reporting import valid_assessment
+        report_response.json.return_value = {"message": {"content": json.dumps(valid_assessment())}, "done": True}
+        post.side_effect = [tool_response, final_response, report_response]
 
         with patch.dict(
             os.environ,
@@ -116,11 +120,15 @@ class InvestigationAgentPolicyTests(unittest.TestCase):
 
         self.assertIn("Incident Investigation Report", report)
         self.assertEqual(context["tool_calls"], 1)
-        self.assertEqual(post.call_count, 2)
+        self.assertEqual(post.call_count, 3)
         second_body = post.call_args_list[1].kwargs["json"]
         self.assertTrue(
             any(message.get("role") == "tool" for message in second_body["messages"])
         )
+        self.assertTrue(any(message.get("tool_name") == "search_historical_incidents"
+                            for message in second_body["messages"] if message.get("role") == "tool"))
+        self.assertNotIn("tools", post.call_args_list[2].kwargs["json"])
+        self.assertIn("format", post.call_args_list[2].kwargs["json"])
         dispatch.assert_called_once()
 
 

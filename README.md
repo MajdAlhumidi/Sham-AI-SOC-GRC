@@ -123,6 +123,11 @@ export WAZUH_INDEXER_CA_CERTS=/usr/local/share/sham-ai/wazuh-root-ca.pem
 ```
 
 Replace credential placeholders with your deployment values and keep secrets outside Git. Model selection must match a model actually installed in Ollama.
+Ollama investigation runs in two phases. First, native tool calls collect evidence using only the incoming agent ID and observed indicators. Tool results are returned with Ollama's `tool_name` field. Then a separate request without tools uses a JSON schema for the assessment, findings, evidence references, limitations, and recommendations. Validated content is rendered into the required report sections; containment, provider status, and historical-query status come from runtime records.
+
+MITRE IDs are restricted to mappings present in cited structured Wazuh rule evidence; absence of a supplied mapping is stated explicitly. Unknown evidence references, incomplete/truncated output, and text pretending to be a function call are not accepted as a final report. One bounded repair request is allowed for invalid structured output. If synthesis still fails, the existing fallback path remains explicit and preserves the actual tool trace. Context is bounded to 4,096 tokens, with separate output budgets for tool selection and report writing, four CPU threads, and a reduced evaluation batch to limit memory pressure. CPU inference may require increasing `SOC_OLLAMA_TIMEOUT_SECONDS` (maximum 300 seconds per request).
+
+See Ollama's [tool-calling protocol](https://docs.ollama.com/capabilities/tool-calling) and [structured-output API](https://docs.ollama.com/capabilities/structured-outputs). Schema and report-format validation do not prove the factual correctness of a classification; analyst review remains necessary.
 
 ### 3. Start the application
 
@@ -262,6 +267,7 @@ Local model inference does not by itself make every integration offline. Gemini 
 | --- | --- |
 | [`scripts/soc_agent.py`](scripts/soc_agent.py) | Main alert monitoring and investigation workflow |
 | [`scripts/investigation_agent.py`](scripts/investigation_agent.py) | Adaptive tool loop, argument validation, and tool audit trail |
+| [`scripts/ollama_reporting.py`](scripts/ollama_reporting.py) | Structured assessment validation, evidence references, and report rendering |
 | [`scripts/agent_tools.py`](scripts/agent_tools.py) | Evidence-tool adapters and dispatch |
 | [`scripts/vector_store.py`](scripts/vector_store.py) | ChromaDB persistence and retrieval |
 | [`scripts/api_server.py`](scripts/api_server.py) | Dashboard, WebSocket, review API, and GRC routing |
@@ -291,7 +297,7 @@ These assets document the monitoring lab; they are not a current GRC dashboard o
 Run from the repository root in a dedicated test environment:
 
 ```bash
-python -m pip install requests fastapi httpx
+python -m pip install requests fastapi httpx opensearch-py
 python -m compileall -q scripts tests
 PYTHONPATH=scripts python -m unittest discover -s scripts/tests -v
 python -m unittest discover -s tests -v
@@ -299,7 +305,7 @@ python -m unittest discover -s tests -v
 
 The commands use Linux shell syntax. On Windows, run the script-level tests from the `scripts` directory, then run the root-level tests from the repository root.
 
-The suite covers investigation boundaries, report controls, human-review behavior, TheHive response handling, GRC access protection, evidence synchronization, risk scoring, and append-only audit behavior. Integration tests use temporary SQLite databases and mocked model/security services. CI runs on pushes to `main` and feature branches, and pull requests targeting `main`.
+The suite covers investigation boundaries, native tool-result feedback, malformed tool-call text, wrong agent IDs, incomplete/truncated reports, invented evidence references, bounded repair, report controls, human-review behavior, TheHive response handling, GRC access protection, evidence synchronization, risk scoring, and append-only audit behavior. Integration tests use temporary SQLite databases and mocked model/security services. CI runs on pushes to `main` and feature branches, and pull requests targeting `main`.
 
 **Live validation is separate:** passing these tests does not establish detection accuracy, model quality, or performance on an AWS deployment. A planned evaluation compares manual and AI-assisted triage using the same cases, measuring time to understanding, evidence completeness, summary quality, escalation, and human correction rates. No measured improvement percentage is claimed here.
 

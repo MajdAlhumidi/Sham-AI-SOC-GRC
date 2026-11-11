@@ -24,7 +24,7 @@ _CLASSIFICATION_PATTERN = re.compile(
 )
 _CONTAINMENT_SECTION = re.compile(
     r"(?ims)^###\s*5\.\s*Containment\s*(?:&|and)\s*Remediation\s*Status\s*\n"
-    r".*?(?=^###\s*6\.|\Z)"
+    r".*?(?=^###\s*\d+\.|\Z)"
 )
 
 _VERIFIED_CONTAINMENT_SECTION = """### 5. Containment & Remediation Status

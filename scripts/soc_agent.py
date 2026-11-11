@@ -435,6 +435,8 @@ def investigate_alert(alert_json: dict):
         fallback_used = True
         print(f"[!] {provider} provider unavailable ({str(api_err)}). Switching to Deterministic Fallback Pipeline...", flush=True)
         report_text = generate_fallback_report(alert_json, str(api_err))
+        if getattr(api_err, "context", None):
+            report_text += "\n\n" + render_tool_trace(api_err.context)
         classification = extract_report_classification(report_text)
 
     # Replace any model-authored containment claim with the orchestrator's verified runtime state.
