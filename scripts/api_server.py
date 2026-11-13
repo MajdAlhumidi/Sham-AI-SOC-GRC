@@ -14,15 +14,18 @@ if __package__:
     from .review_audit import append_human_review
     from .grc.integration import sync_human_review
     from .grc.router import router as grc_router
+    from .casework.router import router as casework_router
 else:
     from alert_context import incident_target_host
     from dashboard import render_dashboard
     from review_audit import append_human_review
     from grc.integration import sync_human_review
     from grc.router import router as grc_router
+    from casework.router import router as casework_router
 
 app = FastAPI(title="Cyber SOC Command Center")
 app.include_router(grc_router, prefix="/api")
+app.include_router(casework_router, prefix="/api")
 
 CHROMA_DB_PATH = "/home/ubuntu/soc-ai-agent/incident_vector_db"
 

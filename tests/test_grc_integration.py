@@ -44,6 +44,7 @@ class GRCIntegrationTests(unittest.TestCase):
         self.review_log = Path(self.directory.name) / "reviews.jsonl"
         self.environment = patch.dict(os.environ, {
             "GRC_DB_PATH": str(Path(self.directory.name) / "grc.sqlite3"),
+            "SOC_CASE_DB_PATH": str(Path(self.directory.name) / "cases.sqlite3"),
             "SOC_GRC_ENABLED": "true", "SOC_GRC_API_TOKEN": "test-grc-token",
             "SOC_REVIEW_API_TOKEN": "test-review-token",
             "SOC_HUMAN_REVIEW_LOG_PATH": str(self.review_log),

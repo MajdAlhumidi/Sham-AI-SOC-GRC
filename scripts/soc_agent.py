@@ -12,6 +12,12 @@ from alert_context import resolve_alert_asset, rule_mitre_ids
 from historical_memory import render_historical_memory, replace_historical_section
 from vector_store import store_incidents
 from grc.integration import sync_incident
+try:
+    from casework.store import capture as capture_investigation
+    from alert_resume import resume_point
+except ModuleNotFoundError:
+    from scripts.casework.store import capture as capture_investigation
+    from scripts.alert_resume import resume_point
 from agent_tools import (
     check_ip_reputation,
     inspect_file_hash,
@@ -491,6 +497,11 @@ def investigate_alert(alert_json: dict):
             llm_model=model_name,
             fallback_used=fallback_used
         )
+        try:
+            linked_case = capture_investigation(record, alert_json, tool_context)
+            print(f"[CASEWORK] Evidence saved; linked investigation: {linked_case}", flush=True)
+        except Exception as evidence_error:
+            print(f"[CASEWORK-ERROR] Evidence persistence failed: {type(evidence_error).__name__}; incident storage continues.", flush=True)
         store_incidents([record])
         print(f"[✓] Stored {case_id} in ChromaDB permanently.", flush=True)
 
@@ -518,7 +529,8 @@ def monitor_live_wazuh(file_path: str = "/var/ossec/logs/alerts/alerts.json", mi
         return
 
     with open(file_path, "r", encoding="utf-8") as f:
-        f.seek(0, os.SEEK_END)
+        offset, already_processed = resume_point(f, file_path)
+        f.seek(offset)
         print(f"\n[✓] SOC Agent is ACTIVE and listening on: {file_path} (Level >= {min_level})", flush=True)
         print("[*] Waiting for incoming security alerts...\n", flush=True)
 
@@ -532,6 +544,8 @@ def monitor_live_wazuh(file_path: str = "/var/ossec/logs/alerts/alerts.json", mi
                 continue
             try:
                 alert = json.loads(line)
+                if str(alert.get("id") or "") in already_processed:
+                    continue
                 if alert.get("rule", {}).get("level", 0) >= min_level:
                     investigate_alert(alert)
             except Exception:

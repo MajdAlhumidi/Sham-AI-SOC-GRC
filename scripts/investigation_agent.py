@@ -261,7 +261,9 @@ def _execute_tool(context: dict, name: str, arguments: dict) -> str:
             "Audit log write failed for tool '{}'; this investigation has an incomplete durable tool audit trail.".format(name)
         )
     context.setdefault("tool_results", []).append({"tool_name": name, "arguments": validated if not rejection else arguments,
-                                                   "status": status, "result": result[:12000]})
+                                                   "status": status, "result": result[:12000],
+                                                   "timestamp": event["timestamp"], "duration_ms": event["duration_ms"],
+                                                   "result_characters": len(result), "truncated": len(result) > 12000})
     return result
 
 
@@ -412,6 +414,8 @@ Be concise: at most three evidence-backed findings, zero hypotheses, two limitat
             if not passed:
                 raise ValueError("Report structure did not pass: " + "; ".join(issues))
             context["report_validation"] = "passed"
+            context["validated_assessment"] = assessment.model_dump()
+            context["report_evidence_packet"] = packet
             return report
         except (ValueError, TypeError) as exc:
             if attempt:

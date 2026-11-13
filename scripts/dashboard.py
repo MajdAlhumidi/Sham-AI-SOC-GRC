@@ -4,8 +4,10 @@ import json
 from fastapi.responses import HTMLResponse
 if __package__:
     from .grc_dashboard import GRC_STYLE, GRC_VIEW, GRC_SCRIPT
+    from .casework.dashboard import STYLE as CASE_STYLE, VIEW as CASE_VIEW, SCRIPT as CASE_SCRIPT
 else:
     from grc_dashboard import GRC_STYLE, GRC_VIEW, GRC_SCRIPT
+    from casework.dashboard import STYLE as CASE_STYLE, VIEW as CASE_VIEW, SCRIPT as CASE_SCRIPT
 
 HTML_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="en">
@@ -146,6 +148,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       .insp-head { gap: 6px; } .insp-id { font-size: 12px; }
     }
 __GRC_STYLES__
+__CASE_STYLES__
   </style>
 </head>
 <body>
@@ -155,7 +158,7 @@ __GRC_STYLES__
       <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#4CC9F0" stroke-width="1.8" aria-hidden="true"><path d="M12 2l8 3v6c0 5-3.4 9.3-8 11-4.6-1.7-8-6-8-11V5z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg>
       <div>
         <div class="brand-title">AI-AGENT DASHBOARD</div>
-        <div class="brand-sub">Autonomous triage &amp; containment console</div>
+        <div class="brand-sub">Evidence-led investigations · Human-led decisions</div>
       </div>
     </div>
     <div class="head-right">
@@ -166,6 +169,7 @@ __GRC_STYLES__
 
   <nav class="mode-nav" role="tablist" aria-label="Dashboard workspace">
     <button class="mode-tab" id="mode-soc" role="tab" aria-controls="soc-view" aria-selected="true" onclick="location.hash='soc'">SOC incidents</button>
+    <button class="mode-tab" id="mode-investigations" role="tab" aria-controls="investigations-view" aria-selected="false" tabindex="-1" onclick="location.hash='investigations/cases'">Investigations</button>
     <button class="mode-tab" id="mode-grc" role="tab" aria-controls="grc-view" aria-selected="false" tabindex="-1" onclick="location.hash='grc/evidence'">GRC workspace</button>
     <button class="soc-update" id="soc-update" hidden onclick="location.reload()">New SOC data · Refresh</button>
   </nav>
@@ -232,7 +236,7 @@ __TABLE_ROWS__
         </div>
 
         <div class="report">
-          <div class="report-head"><div class="report-title">AI Analyst Investigation Notes</div><button class="report-toggle" id="report-toggle" onclick="toggleReportView()" aria-pressed="false">Raw report</button></div>
+          <div class="report-head"><div class="report-title">AI Analyst Investigation Notes</div><button class="report-toggle" id="open-linked-case" onclick="if(allIncidents[selectedIndex])location.hash='investigations/incident/'+encodeURIComponent(allIncidents[selectedIndex].case_id)">Case &amp; evidence ↗</button><button class="report-toggle" id="report-toggle" onclick="toggleReportView()" aria-pressed="false">Raw report</button></div>
           <div class="report-text raw" id="insp-details" tabindex="0" role="region" aria-label="Investigation report">__INITIAL_DETAILS__</div>
         </div>
 
@@ -246,6 +250,7 @@ __TABLE_ROWS__
     </section>
   </main>
 __GRC_VIEW__
+__CASE_VIEW__
 
   <script>
     const allIncidents = __JSON_DATA__;
@@ -411,19 +416,20 @@ __GRC_VIEW__
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
         if (data.type === "NEW_ALERT") {
-          if (!document.getElementById('grc-view').hidden) document.getElementById('soc-update').hidden=false;
+          window.dispatchEvent(new Event('soc-new-alert'));
+          if (document.getElementById('soc-view').hidden) document.getElementById('soc-update').hidden=false;
           else location.reload();
         }
       };
       ws.onclose = () => setTimeout(connectWS, 3000);
     }
 __GRC_SCRIPT__
+__CASE_SCRIPT__
     function routeWorkspace() {
-      const hash=location.hash.slice(1), isGrc=hash==='grc'||hash.startsWith('grc/');
-      document.getElementById('soc-view').hidden=isGrc;
-      document.getElementById('grc-view').hidden=!isGrc;
-      ['soc','grc'].forEach(mode=>{const active=(mode==='grc')===isGrc,node=document.getElementById('mode-'+mode);node.setAttribute('aria-selected',String(active));node.tabIndex=active?0:-1;});
-      if(isGrc){const [section,query='']=hash.replace(/^grc\/?/,'').split('?');window.showGrcRoute(section||'evidence',(new URLSearchParams(query).get('record')||'').slice(0,128));return;}
+      const hash=location.hash.slice(1), mode=hash.startsWith('investigations')?'investigations':hash==='grc'||hash.startsWith('grc/')?'grc':'soc';
+      ['soc','investigations','grc'].forEach(key=>{const active=key===mode,node=document.getElementById('mode-'+key);document.getElementById(key+'-view').hidden=!active;node.setAttribute('aria-selected',String(active));node.tabIndex=active?0:-1;});
+      if(mode==='investigations'){window.showInvestigationRoute();return;}
+      if(mode==='grc'){const [section,query='']=hash.replace(/^grc\/?/,'').split('?');window.showGrcRoute(section||'evidence',(new URLSearchParams(query).get('record')||'').slice(0,128));return;}
       const notice=document.getElementById('soc-incident-notice');notice.hidden=true;
       if(hash.startsWith('soc/incident/')){
         let id;try{id=decodeURIComponent(hash.slice(13));}catch{return;}
@@ -436,7 +442,7 @@ __GRC_SCRIPT__
     window.addEventListener('hashchange',routeWorkspace);
     document.querySelector('.mode-nav').addEventListener('keydown',event=>{
       if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)||!document.activeElement.classList.contains('mode-tab'))return;
-      event.preventDefault();const target=event.key==='Home'?'mode-soc':event.key==='End'?'mode-grc':document.activeElement.id==='mode-soc'?'mode-grc':'mode-soc';document.getElementById(target).focus();document.getElementById(target).click();
+      event.preventDefault();const tabs=[...document.querySelectorAll('.mode-tab')],index=tabs.indexOf(document.activeElement),target=event.key==='Home'?0:event.key==='End'?tabs.length-1:(index+(event.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;tabs[target].focus();tabs[target].click();
     });
     renderReport(allIncidents[0]?.details);
     applyFilters();
@@ -447,6 +453,7 @@ __GRC_SCRIPT__
 </html>"""
 
 HTML_TEMPLATE = HTML_TEMPLATE.replace('__GRC_STYLES__', GRC_STYLE).replace('__GRC_VIEW__', GRC_VIEW).replace('__GRC_SCRIPT__', GRC_SCRIPT)
+HTML_TEMPLATE = HTML_TEMPLATE.replace('__CASE_STYLES__', CASE_STYLE).replace('__CASE_VIEW__', CASE_VIEW).replace('__CASE_SCRIPT__', CASE_SCRIPT)
 
 def verdict_badge_class(v: str) -> str:
     v = v.lower()

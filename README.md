@@ -24,13 +24,21 @@ The project brings together AWS cloud telemetry and on-premises MikroTik monitor
 | Evidence collection | Queries Wazuh Indexer for related alerts, process events, and network activity. |
 | Threat intelligence | Optional AbuseIPDB, VirusTotal, and GreyNoise lookups with explicit provider availability. |
 | Reporting | Produces structured investigation reports, checks required sections, and enforces `NOT_EXECUTED` containment status. |
-| Analyst dashboard | SOC incident investigations and a protected GRC workspace with searchable records and linked incidents. |
+| Analyst dashboard | SOC incidents, protected Investigations and GRC workspaces, with links between source reports and evidence. |
+| Correlated investigations | Conservative grouping by observed asset, rule, source, account and a bounded 30-minute window; timeline and relationship view. |
+| Auditable findings | Original alerts, captured tool results, clickable evidence references, integrity fingerprints and explicit missing-evidence labels. |
+| Business-aware priority | Editable asset criticality, ownership and data sensitivity; explained scores and exact approved-change context without alert suppression. |
 | Human review | Protected API records `accepted`, `corrected`, or `escalated` decisions separately from AI suggestions. |
 | GRC foundation | SQLite-backed risk register, control catalogue, evidence, approval records, and audit events. |
 | SOC-to-GRC connection | Opt-in synchronization of incident provenance and human decisions into GRC evidence. |
 | Case management | Optional TheHive case creation after report validation and explicit configuration. |
 
 ### Investigation boundaries
+
+**Using the new workspace:** open **Investigations** in the Agent dashboard and
+unlock with the existing GRC token. See [Investigation workspace](docs/investigations.md)
+for correlation rules, priority scoring, asset/change forms, legacy data limits
+and the one-time import command.
 
 - Tool calls are limited to a configurable budget: **6 by default, up to 12**.
 - Endpoint queries are restricted to the agent identified in the incoming alert.
