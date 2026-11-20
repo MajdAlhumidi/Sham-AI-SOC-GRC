@@ -1,0 +1,9 @@
+    <section id="iw-comparison" class="iw-lab" hidden>
+      <div class="iw-panel iw-lab-head"><p class="iw-eyebrow">CONTROLLED EVALUATION</p><h2>Compare investigations on the same evidence</h2><p>Review a synthetic case first. Submit your decision, then the AI assesses the same evidence independently. Results stay separate from operational incidents.</p><p class="iw-muted">Small labelled lab samples measure this exercise only. They do not establish production detection accuracy or independently verify analyst identity.</p></div>
+      <p id="iw-lab-message" class="iw-message" role="status" hidden></p>
+      <div class="iw-panel iw-lab-card"><div class="iw-detail-head"><h2>Measured results</h2><button id="iw-lab-refresh" type="button" class="iw-button">Refresh results</button></div><div id="iw-lab-summary" class="iw-lab-scroll"></div></div>
+      <div class="iw-lab-grid">
+        <div class="iw-panel iw-lab-card"><h2>Run an exercise</h2><form id="iw-lab-start"><label>Scenario<select id="iw-lab-scenario" required></select></label><label>Analyst name (as recorded)<input id="iw-lab-analyst" maxlength="160" placeholder="Optional"></label><div class="iw-actions"><button type="submit" class="iw-button primary">Start manual review</button><button type="button" id="iw-lab-ai-only" class="iw-button">Run AI only</button></div></form><p class="iw-muted">Manual timing starts when the case opens. AI-only runs do not create a human baseline.</p><div id="iw-lab-trial"></div></div>
+        <aside class="iw-panel iw-lab-card"><h2>Recorded trials</h2><p class="iw-muted">Completed, pending and failed trials are retained.</p><div id="iw-lab-trials" class="iw-lab-trials"></div></aside>
+      </div>
+    </section>

@@ -115,3 +115,7 @@ def change(change_id: str, payload: ChangeInput):
 @router.get("/audit")
 def audit(offset: int = Query(0, ge=0), limit: int = Query(40, ge=1, le=100)):
     return store.audit_page(offset, limit)
+
+
+from .extensions_router import router as extensions_router
+router.include_router(extensions_router)

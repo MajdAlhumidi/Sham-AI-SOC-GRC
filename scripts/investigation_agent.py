@@ -221,7 +221,10 @@ def _validate_arguments(context: dict, name: str, arguments: dict) -> Tuple[dict
 
 def _dispatch_tool(name: str, arguments: dict) -> str:
     # Lazy import keeps policy tests independent of external service dependencies.
-    from agent_tools import execute_agent_tool
+    if __package__:
+        from .agent_tools import execute_agent_tool
+    else:
+        from agent_tools import execute_agent_tool
     return execute_agent_tool(name, arguments)
 
 

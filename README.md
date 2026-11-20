@@ -14,6 +14,14 @@ The project brings together AWS cloud telemetry and on-premises MikroTik monitor
 
 **Explore:** [Capabilities](#capabilities) · [Architecture](#architecture) · [Setup](#setup) · [GRC](#grc-integration) · [Human review](#human-review) · [Tests](#tests-and-evaluation) · [Roadmap](#roadmap)
 
+**Case workspace:** persistent analyst follow-up questions, read-only evidence collection,
+and redacted portable evidence packs are available inside **Investigations → Cases**.
+The separate **Comparison lab** runs blind manual / actual-model assessments over the
+same 16 labelled synthetic scenarios. No human baseline or productivity improvement is
+invented; AI-only trials, errors and sample limits are explicit.
+See [case follow-ups and evidence](docs/case-followups-and-evidence.md) and
+[comparison experiment](docs/comparison-experiment.md).
+
 ## Capabilities
 
 | Component | Current implementation |
@@ -321,7 +329,7 @@ The commands use Linux shell syntax. On Windows, run the script-level tests from
 
 The suite covers investigation boundaries, native tool-result feedback, malformed tool-call text, wrong agent IDs, incomplete/truncated reports, invented evidence references, bounded repair, report controls, human-review behavior, TheHive response handling, GRC access protection, evidence synchronization, risk scoring, and append-only audit behavior. Integration tests use temporary SQLite databases and mocked model/security services. CI runs on pushes to `main` and feature branches, and pull requests targeting `main`.
 
-**Live validation is separate:** passing these tests does not establish detection accuracy, model quality, or performance on an AWS deployment. A planned evaluation compares manual and AI-assisted triage using the same cases, measuring time to understanding, evidence completeness, summary quality, escalation, and human correction rates. No measured improvement percentage is claimed here.
+**Live validation is separate:** passing these tests does not establish detection accuracy, model quality, or performance on an AWS deployment. The Comparison lab supports paired manual/model review of the same synthetic evidence, with explicit failures, reference checks and wall-time measurements. A genuine human baseline and independently adjudicated, held-out operational evaluation remain to be completed. No measured productivity improvement percentage is claimed here.
 
 ## Roadmap
 
@@ -332,6 +340,9 @@ The suite covers investigation boundaries, native tool-result feedback, malforme
 - [x] GRC risk, control, evidence, approval, and audit APIs
 - [x] SOC incident and human-review evidence synchronization
 - [x] Automated checks on `main`
+- [x] Persistent case follow-ups with bounded read-only tools and evidence references
+- [x] Redacted portable evidence packs with printable report and fingerprint manifest
+- [x] Isolated synthetic comparison lab with blind manual review and actual-model trials
 - [ ] Measured comparison of manual and AI-assisted triage
 - [ ] Curated feedback from reviewed incidents into trusted memory
 - [x] GRC dashboard tab with search, pagination and linked incident investigations

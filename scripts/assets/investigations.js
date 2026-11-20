@@ -18,12 +18,13 @@
   }
   const guarded=fn=>async(...args)=>{try{await fn(...args);}catch(e){msg(e.name==='AbortError'?'Request timed out or was cancelled. Refresh to retry.':e.message,true);}};
   function sectionUI(){
-    ['cases','context','audit'].forEach(k=>$('iw-'+k).hidden=s.section!==k);
+    ['cases','context','comparison','audit'].forEach(k=>$('iw-'+k).hidden=s.section!==k);
     document.querySelectorAll('[data-iw-section]').forEach(b=>{b.classList.toggle('active',b.dataset.iwSection===s.section);b.setAttribute('aria-current',b.dataset.iwSection===s.section?'page':'false');});
   }
   window.showInvestigationRoute=guarded(async()=>{
     const routeEpoch=++s.epoch;s.seq++;s.detailSeq++;s.contextSeq++;msg();
-    const hash=location.hash.slice(1),parts=hash.split('/');s.section=['context','audit'].includes(parts[1])?parts[1]:'cases';sectionUI();
+    const hash=location.hash.slice(1),parts=hash.split('/');s.section=['context','comparison','audit'].includes(parts[1])?parts[1]:'cases';sectionUI();
+    if(s.section==='comparison')return window.loadComparisonLab();
     if(s.section==='context')return loadContext();
     if(s.section==='audit')return loadAudit();
     await loadCases();if(routeEpoch!==s.epoch)return;
@@ -62,6 +63,7 @@
     const meta=el('div',undefined,'iw-chips');meta.append(chip(data.count+' original incident'+(data.count===1?'':'s')),chip(data.legacy?'Archive · evidence incomplete':'Source events captured'));if(!data.asset.id.startsWith('unresolved:'))meta.append(link('Edit asset context ↗','investigations/context'));root.append(meta);
     root.append(el('p','Owner: '+(data.asset.owner||'Unassigned')+' · Service: '+(data.asset.service||'Unassessed'),'iw-muted'));
     const priority=el('details',undefined,'iw-priority');priority.append(el('summary','Why this priority? · '+data.priority.score+'/100'));const reasons=el('ul');data.priority.reasons.forEach(r=>reasons.append(el('li',r)));priority.append(reasons,el('p',data.priority.basis+' '+data.priority.policy,'iw-muted'));root.append(priority);
+    window.mountCaseTools(data,root);
     const tickets=[...new Set(data.priority.change_matches.map(x=>x.ticket))];if(tickets.length)priority.append(el('p','Matching approval references: '+tickets.join(', ')+' · '+data.priority.change_matches.length+' matching incidents.','iw-muted'));
     root.append(el('h3','Observed relationships'));
     const graph=el('div',undefined,'iw-graph');graph.setAttribute('role','group');graph.setAttribute('aria-label','Observed source, target asset and account relationships');

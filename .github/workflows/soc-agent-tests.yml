@@ -31,3 +31,15 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Run GRC and SOC integration tests
         run: python -m unittest discover -s tests -v
+      - name: Set up Node.js for dashboard interaction checks
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install dashboard test dependency
+        run: npm install --no-save --ignore-scripts --prefix /tmp/sham-ui jsdom@31.0.1
+      - name: Check dashboard interactions with isolated synthetic data
+        env:
+          SOC_JSDOM_PATH: /tmp/sham-ui/node_modules/jsdom
+        run: |
+          python tests/workspace_ui_fixture.py /tmp/sham-ui-fixture
+          node tests/case_workspace_ui.cjs /tmp/sham-ui-fixture

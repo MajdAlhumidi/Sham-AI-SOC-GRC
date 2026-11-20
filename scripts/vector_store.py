@@ -1,6 +1,9 @@
 import chromadb
 from chromadb.utils import embedding_functions
-from schema import IncidentRecord
+if __package__:
+    from .schema import IncidentRecord
+else:
+    from schema import IncidentRecord
 
 # 1. إعداد التخزين الدائم
 client = chromadb.PersistentClient(path="./incident_vector_db")

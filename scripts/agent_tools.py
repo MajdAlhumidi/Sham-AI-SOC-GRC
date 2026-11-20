@@ -2,10 +2,24 @@ import os
 import json
 import requests
 
-from vector_store import search_incidents
-from indexer_tool import query_process_tree, query_network_activity, query_related_alerts
-from thehive_tool import create_thehive_incident_case
-from threat_intel import check_ip_reputation as get_ip_intel, check_file_hash as get_hash_intel
+if __package__:
+    from .indexer_tool import query_process_tree, query_network_activity, query_related_alerts
+    from .thehive_tool import create_thehive_incident_case
+    from .threat_intel import check_ip_reputation as get_ip_intel, check_file_hash as get_hash_intel
+else:
+    from vector_store import search_incidents as _script_search_incidents
+    from indexer_tool import query_process_tree, query_network_activity, query_related_alerts
+    from thehive_tool import create_thehive_incident_case
+    from threat_intel import check_ip_reputation as get_ip_intel, check_file_hash as get_hash_intel
+
+
+def search_incidents(*args, **kwargs):
+    """Load embedding storage only for a history query, in either launch mode."""
+    if __package__:
+        from .vector_store import search_incidents as search
+    else:
+        search = _script_search_incidents
+    return search(*args, **kwargs)
 
 WAZUH_HOST = os.getenv("WAZUH_API_HOST", "https://127.0.0.1:55000")
 WAZUH_USER = os.getenv("WAZUH_API_USER", "")
