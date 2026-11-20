@@ -35,8 +35,8 @@ The project brings together AWS cloud telemetry and on-premises MikroTik monitor
 
 ### Investigation boundaries
 
-**Using the new workspace:** open **Investigations** in the Agent dashboard and
-unlock with the existing GRC token. See [Investigation workspace](docs/investigations.md)
+**Using the new workspace:** open **Investigations** in the Agent dashboard;
+records load directly without a workspace token. See [Investigation workspace](docs/investigations.md)
 for correlation rules, priority scoring, asset/change forms, legacy data limits
 and the one-time import command.
 
@@ -178,17 +178,12 @@ export GRC_DB_PATH=/var/lib/sham-ai/grc.sqlite3
 
 Use the same absolute database path on the same host and a local filesystem. The service accounts must be able to write the database directory.
 
-In the **API service environment**, configure a dedicated secret:
+GRC and Investigations open directly inside the Agent dashboard without an
+additional token. Their APIs share the dashboard deployment's access controls;
+`SOC_GRC_API_TOKEN` and `X-GRC-Token` are no longer required, including for writes.
 
 ```bash
-export SOC_GRC_API_TOKEN='replace-with-a-long-random-secret'
-```
-
-Every GRC API request requires `X-GRC-Token`. Routes return `503` if no token is configured and `401` for missing or incorrect credentials.
-
-```bash
-curl -sS http://127.0.0.1:8000/api/grc/health \
-  -H "X-GRC-Token: ${SOC_GRC_API_TOKEN}"
+curl -sS http://127.0.0.1:8000/api/grc/health
 ```
 
 ### What is synchronized
@@ -207,11 +202,11 @@ These links do not automatically set risk ratings, mark controls implemented, or
 
 ### GRC dashboard tab
 
-Open the existing Agent dashboard, select **GRC workspace**, and enter the API service's `SOC_GRC_API_TOKEN`. The direct route is `/#grc/evidence` on the dashboard host. Use the same protected connection as the SOC dashboard; the GitHub Pages website does not serve live incident or GRC data.
+Open the existing Agent dashboard, select **GRC workspace**; records load immediately without a code. The direct route is `/#grc/evidence` on the dashboard host. Use the same protected connection as the SOC dashboard; the GitHub Pages website does not serve live incident or GRC data.
 
-The tab provides **Risks, Controls, Evidence, Approvals, and Audit trail**, with summary counts, server-side search, status/source filters, pagination, record details, and links to related SOC investigations. It displays existing records only; creation, edits and approval decisions remain available through the existing authenticated APIs. If a SOC incident was removed, its retained GRC evidence remains visible and the link explains that the source incident is unavailable.
+The tab provides **Risks, Controls, Evidence, Approvals, and Audit trail**, with summary counts, server-side search, status/source filters, pagination, record details, and links to related SOC investigations. It displays existing records only; creation, edits and approval decisions remain available through the existing APIs on the dashboard host. If a SOC incident was removed, its retained GRC evidence remains visible and the link explains that the source incident is unavailable.
 
-The token stays in page memory and is cleared by **Lock GRC** or a page reload. It is never embedded in the page, URL or browser storage. New SOC alerts show a refresh notice while GRC is open, preserving the current GRC session. The control implementation indicator is not a compliance certification.
+There is no workspace unlock form or Lock button. New SOC alerts show a refresh notice while GRC is open, preserving the current GRC session. The control implementation indicator is not a compliance certification.
 
 See the [GRC module guide](scripts/grc/README.md) for endpoints, request examples, scoring bands, and storage details.
 
@@ -219,7 +214,7 @@ See the [GRC module guide](scripts/grc/README.md) for endpoints, request example
 
 The analyst's decision is recorded separately from the model's suggestion using `POST /api/reviews`.
 
-Configure the **API service** with a secret distinct from the GRC token:
+Configure the **API service** with a dedicated human-review secret:
 
 ```bash
 export SOC_REVIEW_API_TOKEN='replace-with-a-different-long-random-secret'
@@ -254,7 +249,7 @@ curl -sS http://127.0.0.1:8000/api/reviews \
 
 </details>
 
-Reviews are appended to JSONL with restrictive file permissions where supported. They are not automatically promoted into trusted ChromaDB memory. Shared tokens control API access; caller-supplied reviewer or actor labels are not independently verified user identities.
+Reviews are appended to JSONL with restrictive file permissions where supported. They are not automatically promoted into trusted ChromaDB memory. The review token controls access to the review API. GRC and Investigations rely on dashboard deployment access; caller-supplied reviewer or actor labels are not independently verified user identities.
 
 ## Optional integrations
 

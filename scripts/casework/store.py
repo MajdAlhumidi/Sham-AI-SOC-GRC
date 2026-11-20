@@ -287,7 +287,7 @@ def save_asset(asset_id, payload):
         if payload["revision"] != row["revision"]:
             raise ValueError("Asset changed since it was loaded. Refresh before saving.")
         before = json.loads(row["payload"])
-        after = {**before, **payload, "revision": row["revision"]+1, "updated_at": now(), "updated_by": "shared_workspace_token"}
+        after = {**before, **payload, "revision": row["revision"]+1, "updated_at": now(), "updated_by": "dashboard_operator_unverified"}
         conn.execute("UPDATE assets SET payload=?,revision=? WHERE id=?", (encode(after), after["revision"], asset_id))
         log(conn, "asset_updated", asset_id, before, after)
         return after
@@ -303,7 +303,7 @@ def save_change(payload):
         revision = row["revision"] if row else 0
         if payload["revision"] != revision:
             raise ValueError("Change record was updated. Refresh before saving.")
-        after = {**payload, "revision": revision+1, "recorded_at": now(), "recorded_by": "shared_workspace_token"}
+        after = {**payload, "revision": revision+1, "recorded_at": now(), "recorded_by": "dashboard_operator_unverified"}
         conn.execute("INSERT INTO changes VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET asset_id=excluded.asset_id,payload=excluded.payload,revision=excluded.revision", (after["id"], after["asset_id"], encode(after), after["revision"]))
         log(conn, "change_recorded", after["id"], before, after)
         return after

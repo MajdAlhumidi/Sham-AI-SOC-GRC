@@ -1,10 +1,9 @@
 # Investigation workspace
 
-Open **Investigations** inside the Agent dashboard. Unlock it with the existing
-`SOC_GRC_API_TOKEN`. The credential stays in browser memory, is sent only in the
-`X-GRC-Token` header, and is cleared by Lock or reload. GRC and Investigations
-currently have separate unlock forms using the same credential. Use the existing
-private network/SSH tunnel or HTTPS deployment for access.
+Open **Investigations** inside the Agent dashboard. Cases, evidence, asset profiles
+and the audit trail load directly without a workspace token. Deep links open
+their selected case immediately. Access uses the same deployment boundary as
+the SOC dashboard (private network/SSH tunnel or authenticated HTTPS proxy).
 
 ## Cases and correlation
 
@@ -84,8 +83,9 @@ approver, exact asset/rule/IP/account, approval timestamp and a window of at mos
 seven days. Dates are entered in the browser's local timezone and stored with UTC
 offsets. Approval must precede the window. A match never lowers the score,
 suppresses an alert or establishes benign intent. Revoke a record by editing its
-status. The shared access token identifies the credential used, not an individual
-operator; approver names are recorded assertions, not verified identities.
+status. New edits are attributed to `dashboard_operator_unverified`; approver names
+are recorded assertions, not verified identities. Existing audit entries retain
+their original attribution.
 
 ## Storage and deployment
 

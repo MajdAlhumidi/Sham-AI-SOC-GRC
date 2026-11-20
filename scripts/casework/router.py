@@ -1,19 +1,15 @@
-"""Authenticated investigation API; uses the existing GRC workspace credential."""
+"""Investigation API served within the Agent dashboard access boundary."""
 from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from . import store
-try:
-    from ..grc.router import require_grc_token
-except ImportError:
-    from grc.router import require_grc_token
 
 
 def no_cache(response: Response):
     response.headers["Cache-Control"] = "no-store"
 
 
-router = APIRouter(prefix="/investigations", tags=["Investigations"], dependencies=[Depends(require_grc_token), Depends(no_cache)])
+router = APIRouter(prefix="/investigations", tags=["Investigations"], dependencies=[Depends(no_cache)])
 
 
 class AssetInput(BaseModel):

@@ -54,7 +54,7 @@ class GRCIntegrationTests(unittest.TestCase):
         self.environment.start()
         self.client = TestClient(app)
         self.client.__enter__()
-        self.headers = {"X-GRC-Token": "test-grc-token"}
+        self.headers = {}
         self.alert = {
             "id": "alert-123", "timestamp": "2026-11-10T12:00:00Z",
             "rule": {"id": "100100", "level": 7, "description": "Single failed login"},
@@ -81,15 +81,19 @@ class GRCIntegrationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["items"]
 
-    def test_grc_routes_fail_closed_without_valid_token(self):
-        self.assertEqual(self.client.get("/api/grc/health").status_code, 401)
-        self.assertEqual(self.client.get("/api/grc/evidence", headers={"X-GRC-Token": "bad"}).status_code, 401)
-        with patch.dict(os.environ, {"SOC_GRC_API_TOKEN": ""}):
-            self.assertEqual(self.client.get("/api/grc/health", headers=self.headers).status_code, 503)
-        self.assertEqual(self.client.get("/api/grc/health", headers=self.headers).status_code, 200)
+    def test_grc_access_needs_no_token_and_review_keeps_its_credential(self):
+        for configured in ["", "legacy-unused-token"]:
+            with patch.dict(os.environ, {"SOC_GRC_API_TOKEN": configured}):
+                self.assertEqual(self.client.get("/api/grc/health").status_code, 200)
+                self.assertEqual(self.client.get("/api/grc/evidence").status_code, 200)
         self.assertEqual(self.client.post("/api/grc/approvals", json={
             "reference_type": "incident", "reference_id": "INC-TEST",
-            "requested_action": "Review incident",
+            "requested_action": "Review incident", "requested_by": "test-operator",
+        }).status_code, 201)
+        self.assertEqual(self.client.post("/api/reviews", json={
+            "incident_id": "INC-TEST", "agent_classification": "suspicious",
+            "decision": "corrected", "final_classification": "false_positive",
+            "reviewer": "test-analyst", "notes": "Test review.",
         }).status_code, 401)
 
     def test_bridge_is_opt_in_and_replays_do_not_duplicate_evidence(self):

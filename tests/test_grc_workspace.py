@@ -18,7 +18,7 @@ class GRCWorkspaceTests(unittest.TestCase):
         self.env.start()
         self.client = TestClient(app)
         self.client.__enter__()
-        self.headers = {'X-GRC-Token': 'private-workspace-test-token'}
+        self.headers = {}
         self.base = '/api/grc/workspace'
 
     def tearDown(self):
@@ -32,15 +32,16 @@ class GRCWorkspaceTests(unittest.TestCase):
         self.assertEqual(response.headers['cache-control'], 'no-store')
         return response.json()
 
-    def test_all_workspace_routes_are_protected_and_shell_contains_no_token(self):
-        for path in ['/summary', '/risks', '/controls', '/evidence', '/approvals', '/audit', '/controls/SHAM-LOG-001']:
-            self.assertEqual(self.client.get(self.base+path).status_code, 401)
-            self.assertEqual(self.client.get(self.base+path,headers={'X-GRC-Token':'wrong'}).status_code, 401)
-        with patch.dict(os.environ, {'SOC_GRC_API_TOKEN':''}):
-            self.assertEqual(self.client.get(self.base+'/summary',headers=self.headers).status_code,503)
+    def test_workspace_opens_without_token_and_shell_has_no_login(self):
+        for configured in ['', 'legacy-unused-token']:
+            with patch.dict(os.environ, {'SOC_GRC_API_TOKEN':configured}):
+                for path in ['/summary', '/risks', '/controls', '/evidence', '/approvals', '/audit', '/controls/SHAM-LOG-001']:
+                    self.get(path)
         html = render_dashboard([]).body.decode()
         self.assertIn('id="mode-grc"', html)
-        self.assertIn('id="grc-token"', html)
+        self.assertNotIn('id="grc-token"', html)
+        self.assertNotIn('id="grc-access-form"', html)
+        self.assertNotIn('X-GRC-Token', html)
         self.assertNotIn('private-workspace-test-token', html)
         self.assertNotIn('localStorage', html)
         self.assertNotIn('sessionStorage', html)

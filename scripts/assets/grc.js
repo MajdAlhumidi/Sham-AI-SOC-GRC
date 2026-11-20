@@ -1,7 +1,7 @@
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
-  const state = {token:'', epoch:0, section:'evidence', q:'', filter:'', offset:0, limit:40, total:0, records:[], selected:'', listSeq:0, detailSeq:0};
+  const state = {epoch:0, section:'evidence', q:'', filter:'', offset:0, limit:40, total:0, records:[], selected:'', listSeq:0, detailSeq:0};
   const requests = new Set();
   let searchTimer;
   const sections = {
@@ -17,28 +17,13 @@
   function message(text='', error=false) {$('grc-message').textContent=text; $('grc-message').hidden=!text; $('grc-message').classList.toggle('error',error);}
   function empty(target,title,hint='') {target.replaceChildren(el('strong',title),el('span',hint));}
   function tag(value) {const v=String(value||'unknown'); const cls=/^(implemented|approved|closed|accepted)$/.test(v)?'good':/^(rejected|Critical)$/.test(v)?'bad':/^(pending|not_assessed|in_progress|High|open)$/.test(v)?'warn':''; return el('span',pretty(v),'grc-tag '+cls);}
-  function clearAccess(reason='') {
-    state.epoch++; state.listSeq++; state.detailSeq++; state.token=''; state.records=[]; state.selected=''; state.total=0;
-    state.q=''; state.filter=''; state.offset=0;
-    requests.forEach(c=>c.abort()); requests.clear(); clearTimeout(searchTimer);
-    $('grc-token').value=''; $('grc-content').hidden=true; $('grc-unlock').hidden=false;
-    $('grc-refresh').hidden=true; $('grc-lock').hidden=true; $('grc-session').textContent='Locked'; $('grc-session').classList.remove('unlocked');
-    $('grc-table-body').replaceChildren(); $('grc-detail').replaceChildren(); $('grc-page-label').textContent='—';
-    ['risks','controls','evidence','approvals'].forEach(k=>$('grc-kpi-'+k).textContent='—');
-    document.querySelectorAll('[data-grc-count]').forEach(n=>n.textContent='—');
-    $('grc-progress-bar').style.width='0%'; $('grc-assessment-note').textContent='Assessment required'; $('grc-sync-time').textContent='—';
-    $('grc-filter').replaceChildren(el('option','All statuses')); $('grc-search').value=''; message(reason,!!reason);
-  }
   async function get(path, params={}) {
-    const epoch=state.epoch, token=state.token;
-    if(!token)throw new Error('Unlock GRC to view records.');
     const controller=new AbortController(); requests.add(controller);
     const timeout=setTimeout(()=>controller.abort(),20000);
     try {
       const query=new URLSearchParams(params).toString();
-      const response=await fetch('/api/grc/workspace/'+path+(query?'?'+query:''),{headers:{'X-GRC-Token':token},cache:'no-store',signal:controller.signal});
-      if(response.status===401 || response.status===403){if(epoch===state.epoch)clearAccess('Access token was not accepted. Enter a valid GRC token.');throw new Error('Access denied');}
-      if(response.status===503)throw new Error('GRC access is not configured on this server.');
+      const response=await fetch('/api/grc/workspace/'+path+(query?'?'+query:''),{cache:'no-store',signal:controller.signal});
+      if(response.status===503)throw new Error('GRC is temporarily unavailable. Try refreshing.');
       if(response.status===404)throw new Error('This GRC record is no longer available.');
       if(!response.ok)throw new Error('Could not load GRC records (HTTP '+response.status+').');
       return await response.json();
@@ -56,7 +41,6 @@
     $('grc-sync-time').textContent='Updated '+date(new Date().toISOString());
   }
   async function refresh() {
-    if(!state.token)return;
     const epoch=state.epoch; $('grc-refresh').disabled=true; message();
     try{const data=await get('summary');if(epoch!==state.epoch)return;showSummary(data);await loadList();}
     catch(error){if(epoch===state.epoch)message(error.name==='AbortError'?'Request timed out. Try refreshing.':error.message,true);}
@@ -75,7 +59,8 @@
     state.section=section;
     if(changed){state.q=record;state.filter='';state.offset=0;state.selected='';}
     $('grc-search').value=state.q;sectionUI();
-    if(state.token && (changed || !state.records.length))loadList();
+    state.epoch++;state.listSeq++;state.detailSeq++;
+    refresh();
   };
   function go(section,record=''){location.hash='grc/'+section+(record?'?record='+encodeURIComponent(record):'');}
   document.querySelectorAll('[data-grc-section]').forEach(button=>button.addEventListener('click',()=>go(button.dataset.grcSection)));
@@ -104,7 +89,6 @@
     });$('grc-table-body').replaceChildren(fragment);
   }
   async function loadList() {
-    if(!state.token)return;
     const seq=++state.listSeq,epoch=state.epoch;state.detailSeq++;
     $('grc-table-body').replaceChildren();$('grc-list-empty').hidden=false;empty($('grc-list-empty'),'Loading records…');
     $('grc-prev').disabled=true;$('grc-next').disabled=true;$('grc-records').setAttribute('aria-busy','true');
@@ -164,19 +148,12 @@
     if(state.section==='approvals')target.appendChild(el('p','Approval records document human decisions. They do not execute containment.'));
   }
   async function selectRecord(id,incidentOffset=0) {
-    if(!state.token)return;const seq=++state.detailSeq,epoch=state.epoch;state.selected=id;renderRows();
+    const seq=++state.detailSeq,epoch=state.epoch;state.selected=id;renderRows();
     $('grc-detail').replaceChildren(el('div','Loading record…','grc-empty'));
     try{const data=await get(state.section+'/'+encodeURIComponent(id),{incident_offset:incidentOffset});if(seq!==state.detailSeq||epoch!==state.epoch)return;renderDetail(data);$('grc-detail').scrollTop=0;}
     catch(error){if(seq===state.detailSeq&&epoch===state.epoch){$('grc-detail').replaceChildren(el('div',error.message,'grc-empty'));}}
   }
-  $('grc-access-form').addEventListener('submit',async event=>{
-    event.preventDefault();const token=$('grc-token').value.trim();if(!token){message('Enter your GRC access token.',true);return;}
-    state.token=token;const epoch=++state.epoch;$('grc-token').value='';$('grc-unlock-button').disabled=true;message();
-    try{const data=await get('summary');if(epoch!==state.epoch)return;showSummary(data);$('grc-unlock').hidden=true;$('grc-content').hidden=false;$('grc-refresh').hidden=false;$('grc-lock').hidden=false;$('grc-session').textContent='GRC unlocked';$('grc-session').classList.add('unlocked');await loadList();}
-    catch(error){if(epoch===state.epoch){clearAccess();message(error.name==='AbortError'?'Connection timed out. Try again.':error.message,true);}}
-    finally{$('grc-unlock-button').disabled=false;}
-  });
-  $('grc-lock').onclick=()=>clearAccess();$('grc-refresh').onclick=refresh;
+  $('grc-refresh').onclick=refresh;
   $('grc-search').addEventListener('input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{state.q=$('grc-search').value.trim();state.offset=0;state.selected='';loadList();},250);});
   $('grc-filter').addEventListener('change',()=>{state.filter=$('grc-filter').value;state.offset=0;state.selected='';loadList();});
   $('grc-prev').onclick=()=>{state.offset=Math.max(0,state.offset-state.limit);loadList();};$('grc-next').onclick=()=>{state.offset+=state.limit;loadList();};

@@ -34,10 +34,8 @@ The data directory and SQLite files must be backed up and excluded from Git.
 ## Dashboard access
 
 The existing Agent dashboard includes a **GRC workspace** tab at
-`/#grc/evidence`. Unlock it using the API service's `SOC_GRC_API_TOKEN` over
-the deployment's protected connection. The browser sends `X-GRC-Token` only
-to the same-origin GRC workspace API. Locking or reloading clears the token
-and protected records from page memory; no token is saved in browser storage.
+`/#grc/evidence`. It loads records directly without an access token or unlock
+step. Access uses the same deployment boundary as the SOC dashboard.
 
 The five sections display risks, controls, evidence, approvals and audit
 events. Search and filters query the entire SQLite dataset, with 40 records
@@ -49,10 +47,9 @@ no longer in ChromaDB; opening that link reports the missing source.
 This tab is view-only. Existing write APIs remain the way to create risks,
 assess controls or record human approval decisions. Empty registers are
 shown honestly; incident evidence does not create risks or approvals.
-The shared token does not establish individual user identities or roles.
+Dashboard access does not establish individual user identities or roles.
 
-Read endpoints used by the tab (all require the existing GRC token and
-return `Cache-Control: no-store`):
+Read endpoints used by the tab (all return `Cache-Control: no-store`):
 
 - `GET /api/grc/workspace/summary`
 - `GET /api/grc/workspace/{section}?q=...&status=...&offset=0&limit=40`
@@ -65,8 +62,8 @@ The original API endpoints and response shapes are preserved.
 ## API integration
 
 The router is mounted by scripts/api_server.py under /api/grc.
-All routes require the `X-GRC-Token` header matching `SOC_GRC_API_TOKEN`.
-Without a configured token they return 503; invalid credentials return 401.
+Routes do not require `X-GRC-Token` or `SOC_GRC_API_TOKEN`, including writes.
+They use the access controls of the Agent dashboard deployment.
 The database is initialized during API startup, not during module import.
 
 Useful endpoints:
@@ -86,9 +83,8 @@ Useful endpoints:
 - POST /api/grc/integrations/sham-ai/assessment
 
 Write endpoints accept an optional X-Actor header for audit attribution. This
-header is an attribution field, not individual identity verification. The
-shared API token controls access; do not treat a caller-supplied actor name as
-proof of a specific person's identity.
+header is an attribution field, not individual identity verification. Do not
+treat a caller-supplied actor name as proof of a specific person's identity.
 
 ## Integrated SOC evidence
 
@@ -167,9 +163,9 @@ impact are supplied.
 
 ## Security deployment notes
 
-GRC routes require their own API token; the existing human-review route keeps
-its separate review token. The existing dashboard, broadcast and WebSocket
-routes still rely on the deployment's access layer. Protect the full service
+GRC and Investigations use the dashboard deployment's access layer. The
+human-review route keeps its separate review token. The dashboard, broadcast
+and WebSocket routes also rely on the deployment's access layer. Protect the full service
 with trusted network access or an authenticated reverse proxy and TLS. Protect
 the SQLite directory and tokens, define evidence retention, and back up both
 GRC and the original SOC/review stores.

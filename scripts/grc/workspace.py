@@ -12,7 +12,7 @@ def no_store(response: Response):
     response.headers['Cache-Control'] = 'no-store'
 
 
-# Included under the existing GRC router, which requires X-GRC-Token.
+# Included under the GRC router and the Agent dashboard access boundary.
 router = APIRouter(prefix='/workspace', dependencies=[Depends(no_store)])
 SECTIONS = {
     'risks': ('risks', 'status', ['id', 'title', 'description', 'category', 'asset', 'owner'], 'updated_at DESC, id'),

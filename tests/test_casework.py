@@ -19,7 +19,7 @@ class CaseworkTests(unittest.TestCase):
         self.env.start()
         self.client = TestClient(app)
         self.client.__enter__()
-        self.headers = {"X-GRC-Token":"fixture-token"}
+        self.headers = {}
 
     def tearDown(self):
         self.client.__exit__(None, None, None)
@@ -98,19 +98,24 @@ class CaseworkTests(unittest.TestCase):
             conn.execute("UPDATE evidence SET payload=? WHERE ref='A1'",(json.dumps({"changed":True}),))
         self.assertFalse(store.get_evidence("INC-QA-1","A1")["integrity_ok"])
 
-    def test_all_routes_fail_closed_and_shell_does_not_embed_secret(self):
-        for route in ["cases","cases/missing","context","audit","incidents/x","evidence/x/A1"]:
-            self.assertEqual(self.client.get('/api/investigations/'+route).status_code,401)
-        for route in ["assets/x","changes/x"]:
-            self.assertEqual(self.client.put('/api/investigations/'+route,json={}).status_code,401)
-        with patch.dict(os.environ,{"SOC_GRC_API_TOKEN":""}):
-            self.assertEqual(self.get("cases").status_code,503)
+    def test_routes_open_without_workspace_token_and_keep_validation(self):
+        case = self.capture()
+        for configured in ["", "legacy-unused-token"]:
+            with patch.dict(os.environ, {"SOC_GRC_API_TOKEN": configured}):
+                for route in ["cases", "cases/"+case, "context", "audit", "incidents/INC-QA-1", "evidence/INC-QA-1/A1"]:
+                    response = self.get(route)
+                    self.assertEqual(response.status_code, 200, response.text)
+                    self.assertEqual(response.headers["cache-control"], "no-store")
+                self.assertEqual(self.get("cases/missing").status_code, 404)
+                for route in ["assets/x", "changes/x"]:
+                    self.assertEqual(self.client.put('/api/investigations/'+route,json={}).status_code, 422)
         with patch('scripts.api_server.get_real_incidents_from_chroma',return_value=[]):
             page=self.client.get('/').text
         self.assertNotIn("fixture-token",page)
         self.assertIn('id="mode-investigations"',page)
+        self.assertNotIn('id="iw-token"',page)
+        self.assertNotIn('id="iw-access-form"',page)
         self.assertNotIn('__CASE_',page)
-        self.assertEqual(self.get('cases').headers['cache-control'],'no-store')
 
     def change(self,asset):
         return dict(id="CHG-QA-1",revision=0,asset_id=asset,ticket="TEST-1",description="Authorized login validation",rule_id="100111",source_ip="192.0.2.10",account="admin",start="2026-11-13T11:55:00Z",end="2026-11-13T12:30:00Z",approved_at="2026-11-13T11:00:00Z",approved_by="QA approver",status="approved")
@@ -127,6 +132,7 @@ class CaseworkTests(unittest.TestCase):
         self.assertEqual(self.client.put('/api/investigations/assets/'+asset,headers=self.headers,json=payload).status_code,409)
         audit=store.audit_page()['items'][0]
         self.assertEqual(audit['action'],'asset_updated')
+        self.assertEqual(json.loads(audit['after_json'])['updated_by'],'dashboard_operator_unverified')
         self.assertEqual(json.loads(audit['before_json'])['criticality'],'unassessed')
         with store.db() as conn:
             with self.assertRaises(sqlite3.IntegrityError):

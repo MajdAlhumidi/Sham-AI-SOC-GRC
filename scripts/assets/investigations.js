@@ -1,42 +1,32 @@
 (() => {
   'use strict';
   const $=id=>document.getElementById(id), el=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=String(text);if(cls)n.className=cls;return n;};
-  const s={token:'',epoch:0,seq:0,detailSeq:0,evidenceSeq:0,section:'cases',q:'',band:'',offset:0,total:0,selected:'',items:[],assets:[],changes:[],auditOffset:0,contextSeq:0};
+  const s={epoch:0,seq:0,detailSeq:0,evidenceSeq:0,section:'cases',q:'',band:'',offset:0,total:0,selected:'',items:[],assets:[],changes:[],auditOffset:0,contextSeq:0};
   const requests=new Set();let searchTimer;
   const date=(v,legacy=false)=>{if(!v)return 'Time unavailable';let text=String(v);if(!/(Z|[+-]\d{2}:?\d{2})$/.test(text)){if(!legacy)return text+' · timezone unavailable';text+='Z';}const d=new Date(text);return Number.isNaN(d.valueOf())?String(v):d.toISOString().replace('T',' ').slice(0,19)+' UTC';};
   const chip=(value)=>el('span',value,'iw-chip '+String(value).toLowerCase());
   const msg=(text='',error=false)=>{$('iw-message').textContent=text;$('iw-message').hidden=!text;$('iw-message').classList.toggle('error',error);};
-  function lock(reason=''){
-    s.token='';s.epoch++;s.seq++;s.detailSeq++;s.evidenceSeq++;s.contextSeq++;
-    requests.forEach(c=>c.abort());requests.clear();clearTimeout(searchTimer);
-    s.items=[];s.assets=[];s.changes=[];s.selected='';s.offset=0;s.auditOffset=0;
-    $('iw-content').hidden=true;$('iw-unlock').hidden=false;$('iw-lock').hidden=true;$('iw-refresh').hidden=true;$('iw-token').value='';$('iw-session').textContent='Locked';
-    ['iw-case-list','iw-detail','iw-audit-list','iw-evidence-body','iw-asset','iw-change-asset','iw-change-select'].forEach(id=>$(id).replaceChildren());
-    $('iw-asset-form').reset();$('iw-change-form').reset();$('iw-evidence-dialog').close();msg(reason,!!reason);
-  }
   async function api(path,options={}){
-    if(!s.token)throw new Error('Unlock investigations first.');
     const epoch=s.epoch,controller=new AbortController();requests.add(controller);const timer=setTimeout(()=>controller.abort(),20000);
     try{
-      const response=await fetch('/api/investigations/'+path,{...options,headers:{'X-GRC-Token':s.token,'Content-Type':'application/json'},cache:'no-store',signal:controller.signal});
-      if(response.status===401||response.status===403){if(epoch===s.epoch)lock('Access token was not accepted.');throw new Error('Access denied');}
+      const response=await fetch('/api/investigations/'+path,{...options,headers:{'Content-Type':'application/json'},cache:'no-store',signal:controller.signal});
       const data=await response.json();
       if(!response.ok)throw new Error(typeof data.detail==='string'?data.detail:response.status===422?'Check exact identifiers and dates. Approval must precede a window of at most seven days.':'Request failed (HTTP '+response.status+').');
       if(epoch!==s.epoch)throw new DOMException('Session changed','AbortError');
       return data;
     }finally{clearTimeout(timer);requests.delete(controller);}
   }
-  const guarded=fn=>async(...args)=>{try{await fn(...args);}catch(e){if(s.token)msg(e.name==='AbortError'?'Request timed out or was cancelled. Refresh to retry.':e.message,true);}};
+  const guarded=fn=>async(...args)=>{try{await fn(...args);}catch(e){msg(e.name==='AbortError'?'Request timed out or was cancelled. Refresh to retry.':e.message,true);}};
   function sectionUI(){
     ['cases','context','audit'].forEach(k=>$('iw-'+k).hidden=s.section!==k);
     document.querySelectorAll('[data-iw-section]').forEach(b=>{b.classList.toggle('active',b.dataset.iwSection===s.section);b.setAttribute('aria-current',b.dataset.iwSection===s.section?'page':'false');});
   }
   window.showInvestigationRoute=guarded(async()=>{
+    const routeEpoch=++s.epoch;s.seq++;s.detailSeq++;s.contextSeq++;msg();
     const hash=location.hash.slice(1),parts=hash.split('/');s.section=['context','audit'].includes(parts[1])?parts[1]:'cases';sectionUI();
-    if(!s.token)return;
     if(s.section==='context')return loadContext();
     if(s.section==='audit')return loadAudit();
-    await loadCases();
+    await loadCases();if(routeEpoch!==s.epoch)return;
     if(parts[1]==='incident'&&parts[2]){const epoch=s.epoch,data=await api('incidents/'+encodeURIComponent(decodeURIComponent(parts[2])));if(epoch===s.epoch)await selectCase(data.case_id);}
     else if(parts[1]==='case'&&parts[2])await selectCase(decodeURIComponent(parts[2]));
   });
@@ -96,11 +86,11 @@
   }
   const showEvidence=guarded(async(id,ref)=>{
     const seq=++s.evidenceSeq,dialog=$('iw-evidence-dialog');$('iw-evidence-title').textContent=ref+' · '+id;$('iw-evidence-body').replaceChildren(el('p','Loading original evidence…'));if(!dialog.open)dialog.showModal();
-    try{const d=await api('evidence/'+encodeURIComponent(id)+'/'+encodeURIComponent(ref));if(seq!==s.evidenceSeq||!s.token)return;
+    try{const d=await api('evidence/'+encodeURIComponent(id)+'/'+encodeURIComponent(ref));if(seq!==s.evidenceSeq)return;
       const body=$('iw-evidence-body');body.replaceChildren(el('p',d.integrity_ok?'Stored evidence fingerprint verified. This verifies stored bytes, not the truth of the source.':'Integrity check failed. Do not rely on this evidence.','iw-note'),el('p','SHA-256 · '+d.sha256,'iw-fingerprint'),el('p','Source: '+d.record.source+' · Status: '+d.record.status+' · Captured: '+date(d.record.captured_at),'iw-muted'));
       if(d.record.truncated||d.record.capture_limit)body.append(el('p',d.record.truncated?'Tool response was truncated at capture. '+d.record.capture_limit:d.record.capture_limit,'iw-muted'));
       body.append(el('pre',JSON.stringify(d.record,null,2)));
-    }catch(error){if(seq===s.evidenceSeq&&s.token)$('iw-evidence-body').replaceChildren(el('p',error.message,'iw-message error'));}
+    }catch(error){if(seq===s.evidenceSeq)$('iw-evidence-body').replaceChildren(el('p',error.message,'iw-message error'));}
   });
   $('iw-evidence-close').onclick=()=>{$('iw-evidence-dialog').close();s.evidenceSeq++;};
   function options(target,items,value,label){target.replaceChildren();items.forEach(x=>{const o=el('option',label(x));o.value=value(x);target.append(o);});}
@@ -129,11 +119,10 @@
     const button=event.submitter;button.disabled=true;try{await api('changes/'+encodeURIComponent(id),{method:'PUT',body:JSON.stringify(body)});await loadContext();$('iw-change-select').value=id;changeForm();msg('Change context saved with an audit record. No alert was suppressed and no response action was executed.');}finally{button.disabled=false;}
   });
   async function loadAudit(){const seq=++s.contextSeq,data=await api('audit?offset='+s.auditOffset);if(seq!==s.contextSeq)return;const root=$('iw-audit-list');root.replaceChildren();data.items.forEach(x=>{const d=el('details');d.append(el('summary',date(x.at)+' · '+x.action+' · '+x.reference),el('pre',JSON.stringify({before:JSON.parse(x.before_json),after:JSON.parse(x.after_json)},null,2)));root.append(d);});$('iw-audit-page').textContent=data.total?(s.auditOffset+1)+'–'+Math.min(s.auditOffset+40,data.total)+' / '+data.total:'No records';$('iw-audit-prev').disabled=s.auditOffset===0;$('iw-audit-next').disabled=s.auditOffset+40>=data.total;}
-  $('iw-access-form').onsubmit=async event=>{event.preventDefault();s.token=$('iw-token').value.trim();$('iw-token').value='';const epoch=++s.epoch;$('iw-unlock-button').disabled=true;try{await api('cases?limit=1');if(epoch!==s.epoch)return;$('iw-unlock').hidden=true;$('iw-content').hidden=false;$('iw-lock').hidden=false;$('iw-refresh').hidden=false;$('iw-session').textContent='Workspace unlocked';await window.showInvestigationRoute();}catch(e){if(epoch===s.epoch)lock(e.message);}finally{$('iw-unlock-button').disabled=false;}};
-  $('iw-lock').onclick=()=>lock();$('iw-refresh').onclick=()=>window.showInvestigationRoute();
+  $('iw-refresh').onclick=()=>window.showInvestigationRoute();
   $('iw-search').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(guarded(async()=>{s.q=$('iw-search').value.trim();s.offset=0;s.selected='';await loadCases();}),250);};
   $('iw-band').onchange=guarded(async()=>{s.band=$('iw-band').value;s.offset=0;s.selected='';await loadCases();});
   $('iw-prev').onclick=guarded(async()=>{s.offset=Math.max(0,s.offset-30);s.selected='';await loadCases();});$('iw-next').onclick=guarded(async()=>{s.offset+=30;s.selected='';await loadCases();});
   $('iw-audit-prev').onclick=guarded(async()=>{s.auditOffset=Math.max(0,s.auditOffset-40);await loadAudit();});$('iw-audit-next').onclick=guarded(async()=>{s.auditOffset+=40;await loadAudit();});
-  window.addEventListener('soc-new-alert',()=>{if(!$('investigations-view').hidden&&s.token)msg('New incident received. Refresh to update cases; your current selection is preserved.');});
+  window.addEventListener('soc-new-alert',()=>{if(!$('investigations-view').hidden)msg('New incident received. Refresh to update cases; your current selection is preserved.');});
 })();

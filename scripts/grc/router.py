@@ -5,14 +5,12 @@ and AI assessment provenance. It does not execute containment actions.
 """
 
 import hashlib
-import hmac
 import json
-import os
 import uuid
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 
 from .audit import record_audit
 from .db import db_session, initialize_database, utc_now
@@ -31,14 +29,6 @@ from .schemas import (
 from .scoring import calculate_risk_score
 from .workspace import router as workspace_router
 
-def require_grc_token(x_grc_token: Optional[str] = Header(default=None, alias="X-GRC-Token")):
-    """Protect every GRC route, including evidence and human approvals."""
-    expected = os.getenv("SOC_GRC_API_TOKEN", "").strip()
-    if not expected:
-        raise HTTPException(status_code=503, detail="Configure SOC_GRC_API_TOKEN to enable GRC access.")
-    if not x_grc_token or not hmac.compare_digest(x_grc_token, expected):
-        raise HTTPException(status_code=401, detail="Invalid GRC token.")
-
 
 @asynccontextmanager
 async def grc_lifespan(app):
@@ -48,7 +38,7 @@ async def grc_lifespan(app):
 
 router = APIRouter(
     prefix="/grc", tags=["GRC"],
-    dependencies=[Depends(require_grc_token)], lifespan=grc_lifespan,
+    lifespan=grc_lifespan,
 )
 router.include_router(workspace_router)
 

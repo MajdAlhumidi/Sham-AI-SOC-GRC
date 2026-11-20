@@ -1,4 +1,4 @@
-"""Static GRC workspace assets; protected data is requested after unlocking."""
+"""Static GRC workspace assets; data loads directly when its dashboard tab opens."""
 from pathlib import Path
 
 _assets = Path(__file__).resolve().parent / 'assets'
