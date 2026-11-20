@@ -319,7 +319,7 @@ These assets document the monitoring lab; they are not a current GRC dashboard o
 Run from the repository root in a dedicated test environment:
 
 ```bash
-python -m pip install requests fastapi httpx opensearch-py
+python -m pip install requests fastapi httpx opensearch-py python-dotenv
 python -m compileall -q scripts tests
 PYTHONPATH=scripts python -m unittest discover -s scripts/tests -v
 python -m unittest discover -s tests -v
