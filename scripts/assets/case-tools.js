@@ -12,6 +12,16 @@
   window.caseWorkspaceApi=api;
   window.caseWorkspaceNode=node;
   const terminal=new Set(['completed','limited','failed','unavailable']);
+  let requestSequence = 0;
+  function newRequestId() {
+    if (typeof window.crypto?.getRandomValues === 'function') {
+      const bytes = window.crypto.getRandomValues(new Uint8Array(16));
+      return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+    }
+    // The request ID deduplicates submissions. It grants no access.
+    return ['followup', Date.now().toString(36), (++requestSequence).toString(36),
+      Math.random().toString(36).slice(2)].join('-');
+  }
   window.mountCaseTools=(data,root)=>{
     const casePath='cases/'+encodeURIComponent(data.id),box=node('section',undefined,'iw-case-tools');
     box.setAttribute('aria-label','Case follow-up and evidence export');
@@ -24,9 +34,17 @@
       exportStatus.textContent='Evidence pack downloaded: printable report, structured records and fingerprint manifest. Review before sharing.';
     }catch(e){exportStatus.textContent=e.name==='AbortError'?'Export timed out. Retry the download.':e.message;}finally{download.disabled=false;}};
     const form=node('form',undefined,'iw-followup-form'),label=node('label','Follow-up question'),question=node('textarea');
+    form.noValidate = true;
     question.required=true;question.minLength=3;question.maxLength=1200;question.placeholder='Was there a successful login after these failures? What evidence is missing?';label.append(question);
     const submit=node('button','Investigate question','iw-button primary');submit.type='submit';
-    const status=node('p','','iw-inline-status');status.setAttribute('role','status');
+    const status=node('p','','iw-inline-status');status.id='iw-followup-status';status.setAttribute('role','status');
+    question.setAttribute('aria-describedby', status.id);
+    question.addEventListener('input', () => {
+      if (question.getAttribute('aria-invalid') === 'true') {
+        question.removeAttribute('aria-invalid');
+        status.textContent = '';
+      }
+    });
     const list=node('div',undefined,'iw-followup-list');list.setAttribute('aria-live','polite');form.append(label,submit,status);box.append(form,list);root.append(box);
     let requestId='',lastQuestion='',timer=null,active=false,submitting=false;
     const visible=()=>box.isConnected&&!document.getElementById('investigations-view').hidden&&!document.getElementById('iw-cases').hidden;
@@ -55,15 +73,59 @@
             };item.append(inspect);
           }list.append(item);
         });
-        if(active){status.textContent='Investigation is running. You can leave this page and return to its saved result.';clearTimeout(timer);timer=setTimeout(load,3000);}
-        else if(!status.textContent.startsWith('Could'))status.textContent='Follow-up records are saved with this case.';
-      }catch(e){if(visible()){status.textContent='Could not refresh follow-ups: '+(e.name==='AbortError'?'request timed out. Refresh to retry.':e.message);submit.disabled=submitting;}}
+        if(active){status.textContent='Question saved. Investigation is running. You can return to this case for the result.';clearTimeout(timer);timer=setTimeout(load,3000);}
+        else if(result.items.length && !submitting)status.textContent='Follow-up results are saved with this case.';
+      }catch(e){if(visible()){
+        status.textContent=active
+          ? 'Question saved. Could not check its progress. Retrying…'
+          : 'Could not refresh follow-ups: '+(e.name==='AbortError'?'request timed out. Refresh to retry.':e.message);
+        submit.disabled=active||submitting;
+        if(active){clearTimeout(timer);timer=setTimeout(load,3000);}
+      }}
     }
-    form.onsubmit=async event=>{event.preventDefault();if(active||submitting)return;const text=question.value.trim();if(text.length<3)return;
-      if(text!==lastQuestion||!requestId){requestId=crypto.randomUUID();lastQuestion=text;}
-      submitting=true;submit.disabled=true;question.disabled=true;status.textContent='Saving question…';try{await api(casePath+'/followups',{method:'POST',body:JSON.stringify({question:text,request_id:requestId})});question.value='';requestId='';lastQuestion='';await load();}
-      catch(e){status.textContent=e.name==='AbortError'?'Request timed out. Retry the same question safely; the request ID is preserved.':e.message;}
-      finally{submitting=false;question.disabled=false;submit.disabled=active;}
-    };load();
+    form.onsubmit = async event => {
+      event.preventDefault();
+      if (active || submitting) return;
+      const text = question.value.trim();
+      if (text.length < 3 || text.length > 1200) {
+        question.setAttribute('aria-invalid', 'true');
+        status.textContent = text.length < 3
+          ? 'Enter a question of at least 3 characters.'
+          : 'Shorten the question to 1,200 characters or fewer.';
+        question.focus();
+        return;
+      }
+      question.removeAttribute('aria-invalid');
+      submitting = true;
+      submit.disabled = true;
+      question.disabled = true;
+      status.textContent = 'Saving question…';
+      try {
+        if (text !== lastQuestion || !requestId) {
+          requestId = newRequestId();
+          lastQuestion = text;
+        }
+        const turn = await api(casePath + '/followups', {
+          method: 'POST',
+          body: JSON.stringify({question: text, request_id: requestId}),
+        });
+        active = !terminal.has(turn.status);
+        question.value = '';
+        requestId = '';
+        lastQuestion = '';
+        status.textContent = active ? 'Question saved. Investigation is running.' : 'Question saved. Loading the result…';
+        submitting = false;
+        await load();
+      } catch (error) {
+        status.textContent = error.name === 'AbortError'
+          ? 'Request timed out. Submit the same question to retry.'
+          : 'Could not send the question. ' + error.message;
+      } finally {
+        submitting = false;
+        question.disabled = false;
+        submit.disabled = active;
+      }
+    };
+    load();
   };
 })();

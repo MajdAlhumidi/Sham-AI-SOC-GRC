@@ -4,10 +4,12 @@ const fs=require('node:fs'),assert=require('node:assert/strict'),path=require('n
 const dir=process.argv[2],fixture=JSON.parse(fs.readFileSync(path.join(dir,'fixture.json'),'utf8'));
 const html=fs.readFileSync(path.join(dir,'dashboard.html'),'utf8'),tick=()=>new Promise(r=>setTimeout(r,25));
 (async()=>{
-  const errors=[],calls=[];let fail=false,turns=[],trials=[];
+  const errors=[],calls=[],followupRequests=[];let fail=false,failFollowupOnce=true,turns=[],trials=[];
   const vc=new VirtualConsole();vc.on('jsdomError',e=>errors.push(e.message));
   const dom=new JSDOM(html,{url:'http://localhost:8000/#investigations/case/'+fixture.case,runScripts:'dangerously',virtualConsole:vc,beforeParse(w){
     w.WebSocket=class{};w.URL.createObjectURL=()=> 'blob:test-only';w.URL.revokeObjectURL=()=>{};
+    Object.defineProperty(w.crypto,'randomUUID',{value:undefined});
+    Object.defineProperty(w.crypto,'getRandomValues',{value:undefined});
     w.HTMLAnchorElement.prototype.click=function(){calls.push('download:'+this.download)};
     w.HTMLDialogElement.prototype.showModal=function(){this.open=true};w.HTMLDialogElement.prototype.close=function(){this.open=false};
     w.fetch=async(url,options={})=>{
@@ -15,7 +17,12 @@ const html=fs.readFileSync(path.join(dir,'dashboard.html'),'utf8'),tick=()=>new 
       if(fail)return {ok:false,status:503,json:async()=>({detail:'Temporary test outage'})};
       let data=fixture.responses[p];
       if(p.endsWith('/followups')){
-        if(options.method==='POST')turns=[{id:'TURN-UI',status:'completed',question:body.question,answer:'UI test answer: evidence is incomplete.',findings:[],limitations:['Synthetic UI test'],model:'test-double',provider:'test',elapsed_seconds:1,containment_status:'NOT_EXECUTED'}];
+        if(options.method==='POST'){
+          followupRequests.push(body);
+          if(failFollowupOnce){failFollowupOnce=false;return {ok:false,status:503,json:async()=>({detail:'Temporary follow-up outage'})};}
+          turns=[{id:'TURN-UI',status:'completed',question:body.question,answer:'UI test answer: evidence is incomplete.',findings:[],limitations:['Synthetic UI test'],model:'test-double',provider:'test',elapsed_seconds:1,containment_status:'NOT_EXECUTED'}];
+          return {ok:true,status:202,json:async()=>({...turns[0],status:'queued',answer:''})};
+        }
         data={items:turns};
       }
       if(p.endsWith('/followups/TURN-UI'))data={...turns[0],evidence:{A1:{status:'observed',value:'UI evidence'}},tool_trace:[]};
@@ -28,7 +35,17 @@ const html=fs.readFileSync(path.join(dir,'dashboard.html'),'utf8'),tick=()=>new 
   }});
   const w=dom.window,d=w.document;await tick();await tick();
   assert.match(d.getElementById('iw-detail').textContent,/Continue this investigation/);
-  const form=d.querySelector('.iw-followup-form');form.querySelector('textarea').value='What evidence is missing?';form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await tick();await tick();
+  const form=d.querySelector('.iw-followup-form'),question=form.querySelector('textarea'),submit=form.querySelector('button[type=submit]');
+  submit.click();await tick();
+  assert.match(form.textContent,/Enter a question of at least 3 characters/);
+  assert.equal(followupRequests.length,0);
+  question.value='What evidence is missing?';submit.click();await tick();
+  assert.match(form.textContent,/Temporary follow-up outage/);
+  assert.equal(question.value,'What evidence is missing?');
+  submit.click();await tick();await tick();
+  assert.equal(followupRequests.length,2);
+  assert.match(followupRequests[0].request_id,/^[A-Za-z0-9_-]{8,100}$/);
+  assert.equal(followupRequests[0].request_id,followupRequests[1].request_id);
   assert.match(d.getElementById('iw-detail').textContent,/UI test answer/);
   [...d.querySelectorAll('#iw-detail button')].find(x=>x.textContent==='Inspect captured evidence & tool trace').click();await tick();
   assert.match(d.getElementById('iw-detail').textContent,/UI evidence/);
