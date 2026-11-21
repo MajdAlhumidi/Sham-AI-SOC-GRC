@@ -1,4 +1,5 @@
 // Run after workspace_ui_fixture.py. All data and model responses are test doubles.
+process.env.TZ = 'Asia/Damascus';
 const {JSDOM,VirtualConsole}=require(process.env.SOC_JSDOM_PATH||'jsdom');
 const fs=require('node:fs'),assert=require('node:assert/strict'),path=require('node:path');
 const dir=process.argv[2],fixture=JSON.parse(fs.readFileSync(path.join(dir,'fixture.json'),'utf8'));
@@ -7,6 +8,10 @@ const html=fs.readFileSync(path.join(dir,'dashboard.html'),'utf8'),tick=()=>new 
   const errors=[],calls=[],followupRequests=[];let fail=false,failFollowupOnce=true,turns=[],trials=[];
   const vc=new VirtualConsole();vc.on('jsdomError',e=>errors.push(e.message));
   const dom=new JSDOM(html,{url:'http://localhost:8000/#investigations/case/'+fixture.case,runScripts:'dangerously',virtualConsole:vc,beforeParse(w){
+    const BrowserDate = w.Date;
+    w.Date = class extends BrowserDate {
+      constructor(...args) { super(...(args.length ? args : ['2026-11-21T07:29:28Z'])); }
+    };
     w.WebSocket=class{};w.URL.createObjectURL=()=> 'blob:test-only';w.URL.revokeObjectURL=()=>{};
     Object.defineProperty(w.crypto,'randomUUID',{value:undefined});
     Object.defineProperty(w.crypto,'getRandomValues',{value:undefined});
@@ -34,6 +39,7 @@ const html=fs.readFileSync(path.join(dir,'dashboard.html'),'utf8'),tick=()=>new 
     };
   }});
   const w=dom.window,d=w.document;await tick();await tick();
+  assert.match(d.getElementById('clock-display').textContent,/^10:29:28\b/);
   assert.match(d.getElementById('iw-detail').textContent,/Continue this investigation/);
   const form=d.querySelector('.iw-followup-form'),question=form.querySelector('textarea'),submit=form.querySelector('button[type=submit]');
   submit.click();await tick();

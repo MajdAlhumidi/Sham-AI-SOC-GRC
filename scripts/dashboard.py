@@ -163,7 +163,7 @@ __CASE_STYLES__
     </div>
     <div class="head-right">
       <span class="live"><i></i>STREAM ACTIVE</span>
-      <span class="clock" id="clock-display">--:--:-- UTC</span>
+      <span class="clock" id="clock-display" title="Device local time">--:--:--</span>
     </div>
   </header>
 
@@ -257,8 +257,15 @@ __CASE_VIEW__
     let currentFilter = "All";
     let searchQuery = "";
 
+    const clockDisplay = document.getElementById('clock-display');
     function updateClock() {
-      document.getElementById('clock-display').innerText = new Date().toUTCString().slice(17, 25) + " UTC";
+      clockDisplay.textContent = new Date().toLocaleTimeString('en-GB', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hourCycle: 'h23',
+        timeZoneName: 'short',
+      });
     }
     setInterval(updateClock, 1000);
     updateClock();
