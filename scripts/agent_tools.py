@@ -1,6 +1,7 @@
 import os
 import json
 import requests
+from urllib.parse import urlsplit
 
 if __package__:
     from .indexer_tool import query_process_tree, query_network_activity, query_related_alerts
@@ -27,14 +28,23 @@ WAZUH_PASS = os.getenv("WAZUH_API_PASS", "")
 WAZUH_API_VERIFY_TLS = os.getenv("WAZUH_API_VERIFY_TLS", "true").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def validate_wazuh_api_config(*, production=False):
+    lab_override = os.getenv("SOC_ALLOW_INSECURE_TLS_LAB", "false").strip().lower() == "true"
+    if (production or not lab_override) and (not WAZUH_API_VERIFY_TLS or urlsplit(WAZUH_HOST).scheme != "https"):
+        raise ValueError("The Wazuh API requires verified HTTPS. Use the explicit override only in a local lab.")
+    if production and (not WAZUH_USER.strip() or not WAZUH_PASS.strip()):
+        raise ValueError("WAZUH_API_USER and WAZUH_API_PASS are required when the Wazuh API integration is configured.")
+
+
 def get_wazuh_token() -> str:
     """الحصول على JWT Token من Wazuh API للتوثيق."""
+    validate_wazuh_api_config(production=os.getenv("SOC_API_AUTH_MODE") == "token")
     try:
         res = requests.post(
             f"{WAZUH_HOST}/security/user/authenticate",
             auth=(WAZUH_USER, WAZUH_PASS),
             verify=WAZUH_API_VERIFY_TLS,
-            timeout=5
+            timeout=5, allow_redirects=False,
         )
         if res.status_code == 200:
             return res.json().get("data", {}).get("token", "")
@@ -43,7 +53,8 @@ def get_wazuh_token() -> str:
         return ""
 
 
-def search_related_agent_logs(agent_id: str, query: str, time_range_minutes: int = 60) -> str:
+def search_related_agent_logs(agent_id: str, query: str, time_range_minutes: int = 60,
+                              *, source_ip: str = "", location: str = "") -> str:
     """Search recent Wazuh alerts for the incoming agent, not file-integrity scan metadata."""
     try:
         return query_related_alerts(
@@ -51,11 +62,13 @@ def search_related_agent_logs(agent_id: str, query: str, time_range_minutes: int
             query_text=str(query or ""),
             time_range_minutes=int(time_range_minutes),
             size=10,
+            source_ip=source_ip,
+            location=location,
         )
     except Exception as exc:
         return json.dumps({
             "status": "error",
-            "message": "Related-alert search failed: {}".format(exc),
+            "message": "Related-alert search failed ({}).".format(type(exc).__name__),
         }, ensure_ascii=False)
 
 
@@ -117,43 +130,46 @@ def trigger_containment_action(agent_id: str, command: str) -> str:
 def search_historical_incidents(query: str, n_results: int = 2, rule_name: str = None, exclude_source_alert_id: str = None) -> str:
     try:
         limit = max(1, min(int(n_results), 5))
-        results = search_incidents(query_text=query, n_results=limit + (5 if exclude_source_alert_id else 0), rule_name=rule_name)
-        if not results or not results["documents"][0]:
-            return json.dumps({"status": "empty", "message": "No matching historical incidents found in vector memory."})
-
-        matched_cases = []
-        for i in range(len(results["documents"][0])):
-            meta = results["metadatas"][0][i]
-            if exclude_source_alert_id and str(meta.get('source_alert_id') or '') == str(exclude_source_alert_id):
-                continue
-            if rule_name and meta.get('rule_name') != rule_name:
-                continue
-            dist = results["distances"][0][i]
-            matched_cases.append({
-                "incident_id": results['ids'][0][i],
-                "classification": meta.get("classification"),
-                "human_review_status": meta.get("human_review_status", "unknown"),
-                "classification_source": meta.get("classification_source", "unknown"),
-                "rule_name": meta.get("rule_name"),
-                "analyst_notes": str(meta.get("analyst_notes") or '')[:800],
-                "similarity_distance": round(dist, 4),
-                "summary": str(results["documents"][0][i])[:800]
-            })
-            if len(matched_cases) >= limit:
-                break
-
+        matches = {}
+        for verified in (True, False):
+            results = search_incidents(
+                query_text=query, n_results=limit + 5, rule_name=rule_name,
+                human_review_status="verified" if verified else None,
+            ) or {}
+            cases = []
+            for incident_id, meta, distance in zip(
+                (results.get("ids") or [[]])[0], (results.get("metadatas") or [[]])[0],
+                (results.get("distances") or [[]])[0],
+            ):
+                meta = meta or {}
+                status = meta.get("human_review_status", "unknown")
+                if (status == "verified") != verified:
+                    continue
+                if exclude_source_alert_id and str(meta.get("source_alert_id") or "") == exclude_source_alert_id:
+                    continue
+                if rule_name and meta.get("rule_name") != rule_name:
+                    continue
+                cases.append({
+                    "incident_id": incident_id,
+                    "classification": meta.get("human_classification") if verified else meta.get("classification"),
+                    "human_review_status": status,
+                    "classification_source": meta.get("classification_source", "unknown"),
+                    "rule_name": meta.get("rule_name"),
+                    "similarity_distance": round(distance, 4),
+                })
+                if len(cases) >= limit:
+                    break
+            matches[verified] = cases
         return json.dumps({
-            "status": "success" if matched_cases else "empty",
+            "status": "success" if any(matches.values()) else "empty",
             "match_basis": "same_rule_vector_search" if rule_name else "vector_search",
-            "matches_count": len(matched_cases),
-            "historical_cases": matched_cases,
-            "interpretation_note": (
-                "Historical labels are context only. Most legacy records may have unknown review status; "
-                "do not treat them as verified ground truth unless human_review_status explicitly indicates review."
-            )
+            "matches_count": len(matches[True]),
+            "historical_cases": matches[True],
+            "unreviewed_cases": matches[False],
+            "interpretation_note": "Only authenticated human reviews contribute verified historical labels.",
         }, ensure_ascii=False)
     except Exception as e:
-        return json.dumps({"status": "error", "message": f"Vector DB search failed: {str(e)}"})
+        return json.dumps({"status": "error", "message": f"Vector DB search failed ({type(e).__name__})."})
 
 
 def inspect_process_tree(agent_id: str, time_range_minutes: int = 30) -> str:
@@ -181,16 +197,7 @@ SOC_TOOLS_LIST = [
     inspect_file_hash,
 ]
 
-AVAILABLE_TOOLS = {
-    "search_historical_incidents": search_historical_incidents,
-    "inspect_process_tree": inspect_process_tree,
-    "inspect_network_connections": inspect_network_connections,
-    "check_ip_reputation": check_ip_reputation,
-    "inspect_file_hash": inspect_file_hash,
-    "search_related_agent_logs": search_related_agent_logs,
-    "trigger_containment_action": trigger_containment_action,
-    "create_thehive_incident_case": create_thehive_incident_case
-}
+AVAILABLE_TOOLS = {tool.__name__: tool for tool in SOC_TOOLS_LIST}
 
 
 def execute_agent_tool(tool_name: str, tool_args: dict) -> str:

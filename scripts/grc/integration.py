@@ -61,6 +61,7 @@ def sync_incident(record, alert: dict) -> dict:
                     "target_host": data.get("target_host", ""),
                     "target_ip": data.get("destination_ip", "N/A"),
                     "timestamp": alert.get("timestamp"),
+                    "rule_mappings": data.get("rule_mappings", {}),
                 },
             },
             {
@@ -74,6 +75,7 @@ def sync_incident(record, alert: dict) -> dict:
                     "containment_status": data["containment_status"],
                     "report_sha256": hashlib.sha256(data["analyst_notes"].encode("utf-8")).hexdigest(),
                     "human_review_status": "pending",
+                    "report_provenance": data.get("report_provenance", {}),
                     "decision_authority": "recommendation_only_human_analyst_retains_final_decision",
                 },
             },

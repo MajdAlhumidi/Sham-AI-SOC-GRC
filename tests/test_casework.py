@@ -8,7 +8,7 @@ import types
 import unittest
 from unittest.mock import patch
 from fastapi.testclient import TestClient
-from scripts.api_server import app
+from scripts.api_server import create_app
 from scripts.casework import store
 
 
@@ -17,7 +17,7 @@ class CaseworkTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.env = patch.dict(os.environ, {"SOC_CASE_DB_PATH": str(Path(self.temp.name)/"cases.db"), "GRC_DB_PATH": str(Path(self.temp.name)/"grc.db"), "SOC_GRC_API_TOKEN": "fixture-token"})
         self.env.start()
-        self.client = TestClient(app)
+        self.client = TestClient(create_app(), base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000))
         self.client.__enter__()
         self.headers = {}
 

@@ -84,6 +84,9 @@ class WazuhEvidenceInput(BaseModel):
     agent_name: str = Field("", max_length=120)
     timestamp: str = Field("", max_length=80)
     source_ip: str = Field("", max_length=64)
+    pci_dss: list[str] = Field(default_factory=list, max_length=32)
+    mitre_ids: list[str] = Field(default_factory=list, max_length=32)
+    rule_groups: list[str] = Field(default_factory=list, max_length=32)
     summary: str = Field(..., min_length=3, max_length=2000)
     risk_id: Optional[str] = None
     control_ids: List[str] = Field(default_factory=list)
@@ -97,6 +100,10 @@ class AgentAssessmentInput(BaseModel):
     confidence: Optional[float] = Field(None, ge=0, le=1)
     model_name: str = Field("", max_length=120)
     model_version: str = Field("", max_length=120)
+    provider: str = Field("", max_length=80)
+    prompt_template_version: str = Field("", max_length=120)
+    fallback_used: Optional[bool] = None
+    validated_report_sha256: Optional[str] = Field(default=None, pattern=r"^[a-fA-F0-9]{64}$")
     recommendations: List[str] = Field(default_factory=list)
     risk_id: Optional[str] = None
     control_ids: List[str] = Field(default_factory=list)

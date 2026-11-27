@@ -10,7 +10,7 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from .audit import record_audit
 from .db import db_session, initialize_database, utc_now
@@ -53,8 +53,8 @@ def _row_dict(row):
     return dict(row) if row is not None else None
 
 
-def _audit_actor(x_actor: str) -> str:
-    return (x_actor or "unspecified").strip()[:120] or "unspecified"
+def _audit_actor(request: Request) -> str:
+    return request.state.principal.actor_id
 
 
 def _get_risk(connection, risk_id: str):
@@ -96,7 +96,7 @@ def list_risks(status: Optional[str] = Query(None), limit: int = Query(100, ge=1
 
 
 @router.post("/risks", status_code=201)
-def create_risk(payload: RiskCreate, x_actor: str = Header(default="unspecified")):
+def create_risk(payload: RiskCreate, request: Request):
     data = _payload_dict(payload)
     score, level = calculate_risk_score(data["likelihood"], data["impact"])
     residual_score = residual_level = None
@@ -124,7 +124,7 @@ def create_risk(payload: RiskCreate, x_actor: str = Header(default="unspecified"
             ),
         )
         after = _row_dict(_get_risk(connection, risk_id))
-        record_audit(connection, _audit_actor(x_actor), "risk.created", "risk", risk_id, after=after)
+        record_audit(connection, _audit_actor(request), "risk.created", "risk", risk_id, after=after)
     return after
 
 
@@ -138,7 +138,7 @@ def get_risk(risk_id: str):
 
 
 @router.patch("/risks/{risk_id}")
-def update_risk(risk_id: str, payload: RiskUpdate, x_actor: str = Header(default="unspecified")):
+def update_risk(risk_id: str, payload: RiskUpdate, request: Request):
     changes = payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else payload.dict(exclude_unset=True)
     allowed = {
         "title", "description", "category", "asset", "owner", "likelihood", "impact",
@@ -181,12 +181,12 @@ def update_risk(risk_id: str, payload: RiskUpdate, x_actor: str = Header(default
             [*changes.values(), risk_id],
         )
         after = _row_dict(_get_risk(connection, risk_id))
-        record_audit(connection, _audit_actor(x_actor), "risk.updated", "risk", risk_id, before=before, after=after)
+        record_audit(connection, _audit_actor(request), "risk.updated", "risk", risk_id, before=before, after=after)
         return after
 
 
 @router.post("/risks/{risk_id}/controls/{control_id}", status_code=201)
-def link_risk_control(risk_id: str, control_id: str, notes: str = "", x_actor: str = Header(default="unspecified")):
+def link_risk_control(risk_id: str, control_id: str, request: Request, notes: str = ""):
     with db_session() as connection:
         if _get_risk(connection, risk_id) is None:
             raise HTTPException(status_code=404, detail="Risk not found")
@@ -197,7 +197,7 @@ def link_risk_control(risk_id: str, control_id: str, notes: str = "", x_actor: s
             (risk_id, control_id, notes[:1000], utc_now()),
         )
         record_audit(
-            connection, _audit_actor(x_actor), "risk_control.linked", "risk", risk_id,
+            connection, _audit_actor(request), "risk_control.linked", "risk", risk_id,
             after={"control_id": control_id, "notes": notes[:1000]},
         )
     return {"risk_id": risk_id, "control_id": control_id, "linked": True}
@@ -238,7 +238,7 @@ def list_controls(status: Optional[str] = Query(None), domain: Optional[str] = Q
 
 
 @router.post("/controls", status_code=201)
-def create_control(payload: ControlCreate, x_actor: str = Header(default="unspecified")):
+def create_control(payload: ControlCreate, request: Request):
     data = _payload_dict(payload)
     now = utc_now()
     with db_session() as connection:
@@ -258,12 +258,12 @@ def create_control(payload: ControlCreate, x_actor: str = Header(default="unspec
             ),
         )
         after = _row_dict(_get_control(connection, data["id"]))
-        record_audit(connection, _audit_actor(x_actor), "control.created", "control", data["id"], after=after)
+        record_audit(connection, _audit_actor(request), "control.created", "control", data["id"], after=after)
     return after
 
 
 @router.patch("/controls/{control_id}")
-def update_control(control_id: str, payload: ControlUpdate, x_actor: str = Header(default="unspecified")):
+def update_control(control_id: str, payload: ControlUpdate, request: Request):
     changes = payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else payload.dict(exclude_unset=True)
     allowed = {
         "title", "description", "domain", "framework", "framework_ref",
@@ -292,12 +292,12 @@ def update_control(control_id: str, payload: ControlUpdate, x_actor: str = Heade
             [*changes.values(), control_id],
         )
         after = _row_dict(_get_control(connection, control_id))
-        record_audit(connection, _audit_actor(x_actor), "control.updated", "control", control_id, before=before, after=after)
+        record_audit(connection, _audit_actor(request), "control.updated", "control", control_id, before=before, after=after)
     return after
 
 
 @router.post("/evidence", status_code=201)
-def create_evidence(payload: EvidenceCreate):
+def create_evidence(payload: EvidenceCreate, request: Request):
     data = _payload_dict(payload)
     if not data["risk_id"] and not data["control_id"]:
         raise HTTPException(status_code=422, detail="Evidence must be linked to a risk or a control")
@@ -306,6 +306,10 @@ def create_evidence(payload: EvidenceCreate):
             raise HTTPException(status_code=404, detail="Risk not found")
         if data["control_id"] and _get_control(connection, data["control_id"]) is None:
             raise HTTPException(status_code=404, detail="Control not found")
+        display = data.pop("collected_by")
+        data["collected_by"] = _audit_actor(request)
+        if display and display != "unspecified":
+            data["metadata"]["collector_display"] = display
         evidence_id = _insert_evidence(connection, **data)
         row = connection.execute("SELECT * FROM evidence WHERE id = ?", (evidence_id,)).fetchone()
     result = _row_dict(row)
@@ -370,46 +374,56 @@ def compliance_summary():
 
 
 @router.post("/approvals", status_code=201)
-def create_approval(payload: ApprovalCreate, x_actor: str = Header(default="unspecified")):
+def create_approval(payload: ApprovalCreate, request: Request):
     data = _payload_dict(payload)
     approval_id = "APR-" + uuid.uuid4().hex[:12].upper()
     now = utc_now()
+    actor_id = _audit_actor(request)
     with db_session() as connection:
         connection.execute(
             """
             INSERT INTO approvals (
                 id, reference_type, reference_id, requested_action, requested_by,
-                status, created_at
-            ) VALUES (?, ?, ?, ?, ?, 'pending', ?)
+                requested_actor_id, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
             """,
-            (approval_id, data["reference_type"], data["reference_id"], data["requested_action"], data["requested_by"], now),
+            (approval_id, data["reference_type"], data["reference_id"], data["requested_action"],
+             data["requested_by"], actor_id, now),
         )
         row = connection.execute("SELECT * FROM approvals WHERE id = ?", (approval_id,)).fetchone()
-        record_audit(connection, _audit_actor(x_actor), "approval.requested", "approval", approval_id, after=_row_dict(row))
+        record_audit(connection, actor_id, "approval.requested", "approval", approval_id, after=_row_dict(row))
     return _row_dict(row)
 
 
 @router.patch("/approvals/{approval_id}/decision")
-def decide_approval(approval_id: str, payload: ApprovalDecision, x_actor: str = Header(default="unspecified")):
+def decide_approval(approval_id: str, payload: ApprovalDecision, request: Request):
     data = _payload_dict(payload)
+    principal = request.state.principal
     with db_session() as connection:
+        connection.execute("BEGIN IMMEDIATE")
         row = connection.execute("SELECT * FROM approvals WHERE id = ?", (approval_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Approval request not found")
         if row["status"] != "pending":
             raise HTTPException(status_code=409, detail="Approval request has already been decided")
+        if principal.auth_mode == "token":
+            requester_id = row["requested_actor_id"]
+            if not requester_id or requester_id.startswith("local-demo:"):
+                raise HTTPException(409, "An authenticated approval request is required.")
+            if requester_id == principal.actor_id:
+                raise HTTPException(403, "The requester cannot decide their own approval.")
         before = _row_dict(row)
         now = utc_now()
         connection.execute(
             """
             UPDATE approvals
-            SET status = ?, decided_by = ?, decision_note = ?, decided_at = ?
+            SET status = ?, decided_by = ?, decided_actor_id = ?, decision_note = ?, decided_at = ?
             WHERE id = ? AND status = 'pending'
             """,
-            (data["status"], data["decided_by"], data["decision_note"], now, approval_id),
+            (data["status"], data["decided_by"], principal.actor_id, data["decision_note"], now, approval_id),
         )
         after = _row_dict(connection.execute("SELECT * FROM approvals WHERE id = ?", (approval_id,)).fetchone())
-        record_audit(connection, _audit_actor(x_actor), "approval.decided", "approval", approval_id, before=before, after=after)
+        record_audit(connection, principal.actor_id, "approval.decided", "approval", approval_id, before=before, after=after)
     return after
 
 
@@ -428,7 +442,7 @@ def list_approvals(status: Optional[str] = Query(None), limit: int = Query(100, 
 
 
 @router.post("/integrations/wazuh/evidence", status_code=201)
-def record_wazuh_evidence(payload: WazuhEvidenceInput):
+def record_wazuh_evidence(payload: WazuhEvidenceInput, request: Request):
     data = _payload_dict(payload)
     if not data["risk_id"] and not data["control_ids"]:
         raise HTTPException(status_code=422, detail="Provide risk_id or at least one control_id")
@@ -442,6 +456,7 @@ def record_wazuh_evidence(payload: WazuhEvidenceInput):
         "timestamp": data["timestamp"],
         "source_ip": data["source_ip"],
         "summary": data["summary"],
+        "rule_mappings": {"pci_dss": data["pci_dss"], "mitre": data["mitre_ids"], "groups": data["rule_groups"]},
     }
     fingerprint = hashlib.sha256(
         json.dumps(evidence_metadata, sort_keys=True, ensure_ascii=False).encode("utf-8")
@@ -465,14 +480,14 @@ def record_wazuh_evidence(payload: WazuhEvidenceInput):
                 description=data["summary"],
                 sha256=fingerprint,
                 metadata=evidence_metadata,
-                collected_by="wazuh-integration",
+                collected_by=_audit_actor(request),
             )
             created.append(evidence_id)
     return {"status": "recorded", "source": "wazuh", "alert_id": data["alert_id"], "evidence_ids": created}
 
 
 @router.post("/integrations/sham-ai/assessment", status_code=201)
-def record_agent_assessment(payload: AgentAssessmentInput):
+def record_agent_assessment(payload: AgentAssessmentInput, request: Request):
     data = _payload_dict(payload)
     if not data["risk_id"] and not data["control_ids"]:
         raise HTTPException(status_code=422, detail="Provide risk_id or at least one control_id")
@@ -482,6 +497,11 @@ def record_agent_assessment(payload: AgentAssessmentInput):
         "confidence": data["confidence"],
         "model_name": data["model_name"],
         "model_version": data["model_version"],
+        "report_provenance": {
+            "provider": data["provider"], "model": data["model_name"], "model_version": data["model_version"],
+            "prompt_template_version": data["prompt_template_version"], "fallback_used": data["fallback_used"],
+            "validated_report_sha256": data["validated_report_sha256"],
+        },
         "recommendations": data["recommendations"],
         "decision_authority": "recommendation_only_human_analyst_retains_final_decision",
     }
@@ -511,7 +531,7 @@ def record_agent_assessment(payload: AgentAssessmentInput):
                 description=data["summary"],
                 sha256=fingerprint,
                 metadata=metadata,
-                collected_by="sham-ai-agent",
+                collected_by=_audit_actor(request),
             )
             created.append(evidence_id)
     return {

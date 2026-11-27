@@ -1,0 +1,7 @@
+{
+  "syslog:192.0.2.20": {
+    "criticality": "high",
+    "service": "Branch telemetry",
+    "owner": "Network operations"
+  }
+}

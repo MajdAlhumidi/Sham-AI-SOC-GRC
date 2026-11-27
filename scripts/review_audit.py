@@ -17,7 +17,7 @@ ALLOWED_CLASSIFICATIONS = {
 ALLOWED_DECISIONS = {"accepted", "corrected", "escalated"}
 
 
-def append_human_review(payload: Dict[str, Any], path: Optional[str] = None) -> Dict[str, Any]:
+def append_human_review(payload: Dict[str, Any], path: Optional[str] = None, *, principal=None) -> Dict[str, Any]:
     """Validate and append one human-review decision without modifying the original incident."""
     if not isinstance(payload, dict):
         raise ValueError("Review payload must be an object.")
@@ -70,9 +70,14 @@ def append_human_review(payload: Dict[str, Any], path: Optional[str] = None) -> 
         "agent_recommendations": recommendations,
         "human_decision": decision,
         "final_classification": final_classification or None,
-        "reviewer": reviewer,
+        "reviewer": principal.actor_id if principal else reviewer,
         "notes": notes,
     }
+    if principal:
+        record.update(
+            reviewer_display=reviewer, authenticated_subject=principal.subject,
+            authenticated_roles=sorted(principal.roles), auth_mode=principal.auth_mode,
+        )
 
     destination = path or os.getenv("SOC_HUMAN_REVIEW_LOG_PATH", "logs/human_reviews.jsonl")
     directory = os.path.dirname(destination)
@@ -91,3 +96,32 @@ def append_human_review(payload: Dict[str, Any], path: Optional[str] = None) -> 
         pass
 
     return record
+
+
+def sync_review_memory(review, vector_path):
+    """Update historical metadata after a recorded, authenticated final decision."""
+    if review.get("auth_mode") != "token" or not review.get("final_classification"):
+        return "not_eligible"
+    if not os.path.isdir(vector_path):
+        return "unavailable"
+    try:
+        import chromadb
+
+        collection = chromadb.PersistentClient(path=vector_path).get_collection("security_incidents")
+        incident_id = review["incident_id"]
+        existing = collection.get(ids=[incident_id], include=["metadatas"])
+        if not existing.get("ids"):
+            return "incident_unavailable"
+        previous = (existing["metadatas"][0] or {}).get("human_review_at", "")
+        if previous > review["reviewed_at"]:
+            return "newer_review_retained"
+        collection.update(ids=[incident_id], metadatas=[{
+            "human_review_status": "verified",
+            "human_classification": review["final_classification"],
+            "classification_source": "authenticated_human_review",
+            "human_review_id": review["review_id"],
+            "human_review_at": review["reviewed_at"],
+        }])
+        return "verified"
+    except Exception:
+        return "unavailable"

@@ -4,7 +4,7 @@ import json
 import uuid
 from typing import Any, Optional
 
-from .db import utc_now
+from .db import append_chain_entry, utc_now
 
 
 def record_audit(
@@ -17,6 +17,7 @@ def record_audit(
     after: Optional[Any] = None,
     reason: Optional[str] = None,
 ) -> None:
+    entry_id = uuid.uuid4().hex
     connection.execute(
         """
         INSERT INTO audit_logs (
@@ -25,7 +26,7 @@ def record_audit(
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            uuid.uuid4().hex,
+            entry_id,
             actor or "unspecified",
             action,
             entity_type,
@@ -36,3 +37,4 @@ def record_audit(
             utc_now(),
         ),
     )
+    append_chain_entry(connection, "audit_logs", entry_id)

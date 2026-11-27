@@ -7,11 +7,13 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 if __package__:
-    from .alert_context import resolve_alert_asset, rule_mitre_ids
+    from .alert_context import calibrate_severity, external_lookup_note, resolve_alert_asset, rule_mappings, rule_mitre_ids
     from .historical_memory import compact_history, render_historical_memory
+    from .report_quality import analyst_steps
 else:
-    from alert_context import resolve_alert_asset, rule_mitre_ids
+    from alert_context import calibrate_severity, external_lookup_note, resolve_alert_asset, rule_mappings, rule_mitre_ids
     from historical_memory import compact_history, render_historical_memory
+    from report_quality import analyst_steps
 
 Text = Annotated[str, Field(min_length=15, max_length=1000)]
 EvidenceRefs = Annotated[list[str], Field(min_length=1, max_length=4)]
@@ -75,6 +77,7 @@ def evidence_packet(alert, context):
         'level': rule.get('level', 0),
         'description': str(rule.get('description', ''))[:600],
         'mitre': {'id': rule_mitre_ids(rule)},
+        'source_mappings': rule_mappings(rule),
     }
     source['affected_asset'] = resolve_alert_asset(alert)
     for key, value in list(source.items()):
@@ -157,6 +160,7 @@ def _line(value):
 def render_assessment(assessment, alert, context, packet):
     rule, agent, data = alert.get("rule") or {}, alert.get("agent") or {}, alert.get("data") or {}
     asset = resolve_alert_asset(alert)
+    severity, severity_reason = calibrate_severity(alert, context)
     findings = [f"- {_line(x.observation)} [{', '.join(x.evidence)}]" for x in assessment.findings]
     # Rule mappings are observed metadata. They must not disappear when the
     # model chooses an empty MITRE list, nor become a claim of compromise.
@@ -167,6 +171,11 @@ def render_assessment(assessment, alert, context, packet):
     ]
     intel = [f"- [{ref}] `{item['tool']}`: {item['status']}. Provider details are in the recorded tool response."
              for ref, item in packet.items() if item.get("tool") in {"check_ip_reputation", "inspect_file_hash"}]
+    if not intel:
+        intel.append("- Not checked: no reputation/hash tool call was recorded.")
+    lookup_note = external_lookup_note(data.get("srcip") or data.get("src_ip"))
+    if lookup_note:
+        intel.insert(0, "- " + lookup_note)
     diagnostics = []
     for ref, item in packet.items():
         if ref == "A1":
@@ -176,10 +185,12 @@ def render_assessment(assessment, alert, context, packet):
     if not diagnostics:
         diagnostics.append("- No investigation tool was executed. This report is initial triage based on the incoming alert only.")
     diagnostics.extend(f"- Audit limitation: {_line(w)}" for w in context.get("audit_warnings", []))
+    if context.get("tool_policy_note"):
+        diagnostics.append("- " + context["tool_policy_note"])
     lines = [
         "# Incident Investigation Report", "", "### 1. Incident Classification & Severity Level",
         f"* **Classification**: **{assessment.classification}**",
-        f"* **Severity Level**: **{assessment.severity}**",
+        f"* **Severity Level**: **{severity}**. {severity_reason}",
         f"* **Alert Description**: {_line(rule.get('description', 'Security Alert'))}",
         f"* **Affected Host**: `{_line(asset['name'])}`",
         f"* **Target Address**: `{_line(asset['ip'])}`",
@@ -187,7 +198,7 @@ def render_assessment(assessment, alert, context, packet):
         f"* **Source Address**: `{_line(data.get('srcip') or data.get('src_ip') or 'N/A')}`",
         f"* **Assessment**: {_line(assessment.assessment)}", "",
         "### 2. Analysis & Technical Findings", *findings, "",
-        "**Threat intelligence**", *(intel or ["- Not checked: no reputation/hash tool call was recorded."]), "",
+        "**Threat intelligence**", *intel, "",
         "### 3. MITRE ATT&CK Mapping", *(techniques or ["- No structured rule mapping was supplied; no MITRE technique is asserted."]), "",
         "### 4. Historical Memory Context (Vector DB)",
         render_historical_memory(context), "",
@@ -195,7 +206,7 @@ def render_assessment(assessment, alert, context, packet):
         "1. **Host Isolation**: NOT_EXECUTED. Investigation tools are read-only.",
         "2. **External Case Creation**: Not attempted by the model; the orchestrator records any subsequent action separately.", "",
         "### 6. Recommended Next Steps for Human Analysts",
-        *[f"{i}. {_line(x)}" for i, x in enumerate(assessment.recommendations, 1)], "",
+        *[f"{i}. {_line(x)}" for i, x in enumerate(analyst_steps(alert, assessment.recommendations), 1)], "",
         "### 7. Diagnostic & Audit Notes",
         "- [A1] Incoming alert is observed evidence, not proof of compromise.",
         *diagnostics, "", "**Evidence limitations**", *[f"- {_line(x)}" for x in assessment.limitations],

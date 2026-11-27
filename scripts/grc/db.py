@@ -5,10 +5,22 @@ import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from hashlib import sha256
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "grc.sqlite3"
+CHAIN_SOURCES = {
+    "audit_logs": (
+        "SELECT * FROM audit_logs WHERE id=?",
+        "SELECT id FROM audit_logs ORDER BY rowid",
+    ),
+    "evidence": (
+        "SELECT * FROM evidence WHERE id=?",
+        "SELECT id FROM evidence ORDER BY rowid",
+    ),
+}
+GENESIS = "0" * 64
 
 
 def database_path() -> Path:
@@ -131,6 +143,36 @@ def initialize_database() -> None:
                 created_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS thehive_deliveries (
+                incident_id TEXT PRIMARY KEY,
+                approval_id TEXT NOT NULL REFERENCES approvals(id),
+                result_json TEXT,
+                started_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS grc_integrity_chain (
+                stream TEXT NOT NULL CHECK (stream IN ('audit_logs','evidence')),
+                seq INTEGER NOT NULL CHECK (seq > 0),
+                entry_id TEXT NOT NULL,
+                prev_sha256 TEXT NOT NULL,
+                entry_sha256 TEXT NOT NULL,
+                PRIMARY KEY (stream, seq),
+                UNIQUE (stream, entry_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS grc_migrations (
+                name TEXT PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            );
+
+            CREATE TRIGGER IF NOT EXISTS integrity_chain_no_update
+            BEFORE UPDATE ON grc_integrity_chain
+            BEGIN SELECT RAISE(ABORT, 'grc_integrity_chain is append-only'); END;
+
+            CREATE TRIGGER IF NOT EXISTS integrity_chain_no_delete
+            BEFORE DELETE ON grc_integrity_chain
+            BEGIN SELECT RAISE(ABORT, 'grc_integrity_chain is append-only'); END;
+
             CREATE INDEX IF NOT EXISTS idx_risks_status ON risks(status);
             CREATE INDEX IF NOT EXISTS idx_risks_level ON risks(inherent_level);
             CREATE INDEX IF NOT EXISTS idx_controls_status ON controls(implementation_status);
@@ -151,7 +193,75 @@ def initialize_database() -> None:
             END;
             """
         )
+        connection.execute("BEGIN IMMEDIATE")
+        ensure_columns(connection, "approvals", {
+            "requested_actor_id": "TEXT",
+            "decided_actor_id": "TEXT",
+        })
+        if not connection.execute("SELECT 1 FROM grc_migrations WHERE name='integrity_chain_v1'").fetchone():
+            for stream, (_, list_sql) in CHAIN_SOURCES.items():
+                for source in connection.execute(list_sql):
+                    append_chain_entry(connection, stream, source["id"])
+            connection.execute("INSERT INTO grc_migrations VALUES ('integrity_chain_v1',?)", (utc_now(),))
         seed_default_controls(connection)
+
+
+def ensure_columns(connection, table, columns):
+    existing = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})")}
+    for name, sql_type in columns.items():
+        if name not in existing:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}")
+
+
+def _entry_digest(stream, sequence, previous, record):
+    payload = {"stream": stream, "seq": sequence, "prev_sha256": previous, "record": dict(record)}
+    data = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return sha256(data).hexdigest()
+
+
+def append_chain_entry(connection, stream, entry_id):
+    """Append within the same write transaction as the original record."""
+    row = connection.execute(CHAIN_SOURCES[stream][0], (entry_id,)).fetchone()
+    if row is None:
+        raise ValueError("An integrity entry must reference a stored GRC record.")
+    head = connection.execute(
+        "SELECT seq, entry_sha256 FROM grc_integrity_chain WHERE stream=? ORDER BY seq DESC LIMIT 1", (stream,),
+    ).fetchone()
+    sequence, previous = (head["seq"] + 1, head["entry_sha256"]) if head else (1, GENESIS)
+    connection.execute(
+        "INSERT INTO grc_integrity_chain VALUES (?,?,?,?,?)",
+        (stream, sequence, entry_id, previous, _entry_digest(stream, sequence, previous, row)),
+    )
+
+
+def verify_integrity_chains():
+    """Verify sequence, links, digests, and coverage against one read snapshot."""
+    results = {}
+    with db_session() as connection:
+        connection.execute("BEGIN")
+        for stream, (select_sql, list_sql) in CHAIN_SOURCES.items():
+            previous = GENESIS
+            seen = set()
+            invalid = None
+            entries = connection.execute(
+                "SELECT * FROM grc_integrity_chain WHERE stream=? ORDER BY seq", (stream,),
+            )
+            for sequence, entry in enumerate(entries, 1):
+                row = connection.execute(select_sql, (entry["entry_id"],)).fetchone()
+                if (entry["seq"] != sequence or entry["prev_sha256"] != previous or row is None
+                        or entry["entry_sha256"] != _entry_digest(stream, sequence, previous, row)):
+                    invalid = sequence
+                    break
+                seen.add(entry["entry_id"])
+                previous = entry["entry_sha256"]
+            expected = {row["id"] for row in connection.execute(list_sql)}
+            results[stream] = {
+                "valid": invalid is None and seen == expected,
+                "verified_records": len(seen),
+                "stored_records": len(expected),
+                "first_invalid_seq": invalid,
+            }
+    return results
 
 
 def seed_default_controls(connection: sqlite3.Connection) -> None:

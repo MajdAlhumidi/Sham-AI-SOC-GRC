@@ -1,7 +1,7 @@
 import os
 import json
 import ssl
-import urllib3
+from urllib.parse import urlsplit
 from opensearchpy import OpenSearch
 
 # إعدادات الاتصال بـ Wazuh Indexer
@@ -10,12 +10,16 @@ INDEXER_USER = os.getenv("WAZUH_INDEXER_USER", "")
 INDEXER_PASS = os.getenv("WAZUH_INDEXER_PASS", "")
 INDEXER_VERIFY_TLS = os.getenv("WAZUH_INDEXER_VERIFY_TLS", "true").strip().lower() in {"1", "true", "yes", "on"}
 
-if not INDEXER_VERIFY_TLS:
-    # Only suppress warnings when an isolated lab explicitly disables verification.
-    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+def validate_indexer_config(*, production=False):
+    lab_override = os.getenv("SOC_ALLOW_INSECURE_TLS_LAB", "false").strip().lower() == "true"
+    if (production or not lab_override) and (not INDEXER_VERIFY_TLS or urlsplit(INDEXER_HOST).scheme != "https"):
+        raise ValueError("Wazuh Indexer requires verified HTTPS. Use the explicit override only in a local lab.")
+    if production and (not INDEXER_USER.strip() or not INDEXER_PASS.strip()):
+        raise ValueError("WAZUH_INDEXER_USER and WAZUH_INDEXER_PASS are required for the live agent.")
 
 
 def get_opensearch_client() -> OpenSearch:
+    validate_indexer_config(production=os.getenv("SOC_API_AUTH_MODE") == "token")
     # A private CA must be explicitly trusted; hostname verification remains enabled.
     ca_bundle = os.getenv("WAZUH_INDEXER_CA_CERTS", "").strip()
     tls_options = {"verify_certs": INDEXER_VERIFY_TLS, "ssl_show_warn": INDEXER_VERIFY_TLS}
@@ -163,7 +167,8 @@ def query_network_activity(agent_id: str, time_range_minutes: int = 30) -> str:
             "message": "Indexer network-evidence query failed: {}".format(e)
         }, ensure_ascii=False)
 
-def query_related_alerts(agent_id: str, query_text: str = "", time_range_minutes: int = 60, size: int = 10) -> str:
+def query_related_alerts(agent_id: str, query_text: str = "", time_range_minutes: int = 60, size: int = 10,
+                         *, source_ip: str = "", location: str = "") -> str:
     """Search recent Wazuh alerts for one agent, optionally ranked by investigative context."""
     try:
         minutes = max(1, min(int(time_range_minutes), 240))
@@ -176,9 +181,16 @@ def query_related_alerts(agent_id: str, query_text: str = "", time_range_minutes
 
     query_text = str(query_text or "").strip()[:500]
     bool_query = {
-        "must": [{"match": {"agent.id": str(agent_id)}}],
+        "must": [{"term": {"agent.id": str(agent_id)}}],
         "filter": [{"range": {"timestamp": {"gte": "now-{}m".format(minutes)}}}],
     }
+    if source_ip:
+        bool_query["filter"].append({"bool": {
+            "should": [{"term": {"data.srcip": source_ip}}, {"term": {"data.src_ip": source_ip}}],
+            "minimum_should_match": 1,
+        }})
+    if location:
+        bool_query["filter"].append({"term": {"location": location}})
     if query_text:
         bool_query["should"] = [{
             "multi_match": {
@@ -208,6 +220,7 @@ def query_related_alerts(agent_id: str, query_text: str = "", time_range_minutes
             rule = src.get("rule") or {}
             agent = src.get("agent") or {}
             alerts.append({
+                "id": src.get("id") or hit.get("_id"),
                 "timestamp": src.get("timestamp"),
                 "agent_id": agent.get("id"),
                 "agent_name": agent.get("name"),

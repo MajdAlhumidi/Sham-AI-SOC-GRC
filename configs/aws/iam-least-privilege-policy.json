@@ -1,80 +1,58 @@
-AmazonMacieReadOnlyAccess
 {
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Action": [
-                "macie2:Describe*",
-                "macie2:Get*",
-                "macie2:List*",
-                "macie2:BatchGetCustomDataIdentifiers",
-                "macie2:SearchResources"
-            ],
-            "Resource": "*"
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ListCloudTrailPrefix",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::<CLOUDTRAIL_BUCKET>",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": "<CLOUDTRAIL_PREFIX>*"
         }
-    ]
-}
-
-AmazonS3ReadOnlyAccess
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Action": [
-                "s3:Get*",
-                "s3:List*",
-                "s3:Describe*",
-                "s3-object-lambda:Get*",
-                "s3-object-lambda:List*"
-            ],
-            "Resource": "*"
+      }
+    },
+    {
+      "Sid": "ReadCloudTrailObjects",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::<CLOUDTRAIL_BUCKET>/<CLOUDTRAIL_PREFIX>*"
+    },
+    {
+      "Sid": "ReadDesignatedCloudWatchGroup",
+      "Effect": "Allow",
+      "Action": [
+        "logs:DescribeLogStreams",
+        "logs:FilterLogEvents"
+      ],
+      "Resource": "arn:aws:logs:<REGION>:<ACCOUNT_ID>:log-group:<LOG_GROUP>",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "<REGION>"
         }
-    ]
-}
-
-AWSCloudTrail_ReadOnlyAccess
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Action": [
-                "cloudtrail:Get*",
-                "cloudtrail:Describe*",
-                "cloudtrail:List*",
-                "cloudtrail:LookupEvents"
-            ],
-            "Resource": "*"
+      }
+    },
+    {
+      "Sid": "ReadDesignatedCloudWatchStreams",
+      "Effect": "Allow",
+      "Action": "logs:GetLogEvents",
+      "Resource": "arn:aws:logs:<REGION>:<ACCOUNT_ID>:log-group:<LOG_GROUP>:log-stream:*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "<REGION>"
         }
-    ]
-}
-
-CloudWatchLogsReadOnlyAccess
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Sid": "CloudWatchLogsReadOnlyAccess",
-            "Effect": "Allow",
-            "Action": [
-                "logs:Describe*",
-                "logs:Get*",
-                "logs:List*",
-                "logs:StartQuery",
-                "logs:StopQuery",
-                "logs:TestMetricFilter",
-                "logs:FilterLogEvents",
-                "logs:StartLiveTail",
-                "logs:StopLiveTail",
-                "cloudwatch:GenerateQuery",
-                "cloudwatch:GenerateQueryResultsSummary",
-                "observabilityadmin:ListS3TableIntegrations",
-                "observabilityadmin:GetS3TableIntegration",
-                "observabilityadmin:ListTelemetryPipelines"
-            ],
-            "Resource": "*"
+      }
+    },
+    {
+      "Sid": "LookupRegionalCloudTrailEvents",
+      "Effect": "Allow",
+      "Action": "cloudtrail:LookupEvents",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "<REGION>"
         }
-    ]
+      }
+    }
+  ]
 }

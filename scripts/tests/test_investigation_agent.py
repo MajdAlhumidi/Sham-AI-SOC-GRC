@@ -55,7 +55,7 @@ class InvestigationAgentPolicyTests(unittest.TestCase):
         )
         payload = json.loads(result)
         self.assertEqual(payload["status"], "blocked")
-        self.assertIn("globally routable public IPs", payload["message"])
+        self.assertIn("10.0.0.15 (private)", payload["message"])
         dispatch.assert_not_called()
 
     @patch("investigation_agent._write_audit_event", return_value=False)

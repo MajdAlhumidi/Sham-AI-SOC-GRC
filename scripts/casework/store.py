@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sqlite3
+from time import sleep
 
 try:
     from ..alert_context import resolve_alert_asset
@@ -50,12 +51,13 @@ def db():
     path = Path(os.getenv("SOC_CASE_DB_PATH", "data/investigations.sqlite3"))
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, timeout=20)
-    if os.name != "nt":
-        path.chmod(0o600)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.executescript("""
+    try:
+        if os.name != "nt":
+            path.chmod(0o600)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        _retry_locked(lambda: conn.execute("PRAGMA journal_mode=WAL"))
+        _retry_locked(lambda: conn.executescript("""
       CREATE TABLE IF NOT EXISTS cases(id TEXT PRIMARY KEY, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS events(
         id TEXT PRIMARY KEY, case_id TEXT NOT NULL REFERENCES cases(id),
@@ -79,8 +81,7 @@ def db():
         BEGIN SELECT RAISE(ABORT,'append-only audit'); END;
       CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit
         BEGIN SELECT RAISE(ABORT,'append-only audit'); END;
-    """)
-    try:
+        """))
         with conn:
             yield conn
     finally:
@@ -97,7 +98,7 @@ def asset_identity(record, alert):
         asset = resolve_alert_asset(alert)
         agent_id = clean((alert.get("agent") or {}).get("id"))
         if asset["source"] == "remote_syslog":
-            key = "syslog:" + asset["ip"]
+            key = "syslog:" + asset["ip"] if clean(asset["ip"]) else ""
         elif agent_id and agent_id != "000":
             key = "agent:" + agent_id
         else:
@@ -110,6 +111,53 @@ def asset_identity(record, alert):
 def _evidence(conn, incident_id, ref, payload):
     raw = encode(payload)
     conn.execute("INSERT INTO evidence VALUES(?,?,?,?)", (incident_id, ref, raw, sha256(raw.encode()).hexdigest()))
+
+
+def inventory_profile(asset_id):
+    path = os.getenv("SOC_ASSET_INVENTORY_PATH")
+    if not path:
+        return {}
+    try:
+        profiles = json.loads(Path(path).read_text(encoding="utf-8"))
+        profile = profiles.get(asset_id, {})
+    except (OSError, ValueError, AttributeError):
+        return {}
+    if not isinstance(profile, dict):
+        return {}
+    result = {key: value[:200] for key in ("owner", "service") if isinstance(value := profile.get(key), str)}
+    if profile.get("criticality") in {"low", "medium", "high", "critical"}:
+        result["criticality"] = profile["criticality"]
+    return result
+
+
+def asset_criticality(alert):
+    asset_id, _, _ = asset_identity({}, alert)
+    if asset_id:
+        with db() as conn:
+            row = conn.execute("SELECT payload FROM assets WHERE id=?", (asset_id,)).fetchone()
+            if row:
+                return json.loads(row[0]).get("criticality", "unassessed")
+        return inventory_profile(asset_id).get("criticality", "unassessed")
+    return "unassessed"
+
+
+def _retry_locked(operation):
+    for attempt in range(3):
+        try:
+            return operation()
+        except sqlite3.OperationalError as exc:
+            code = getattr(exc, "sqlite_errorcode", 0) & 0xff
+            if attempt == 2 or code not in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
+                raise
+            sleep(0.05 * (attempt + 1))
+
+
+def _begin_capture(conn):
+    conn.execute("PRAGMA busy_timeout=3000")
+    try:
+        _retry_locked(lambda: conn.execute("BEGIN IMMEDIATE"))
+    finally:
+        conn.execute("PRAGMA busy_timeout=20000")
 
 
 def capture(record, alert=None, context=None):
@@ -132,7 +180,7 @@ def capture(record, alert=None, context=None):
     reason = "Standalone: insufficient observed identifiers or event time."
     case_id = "CASE-" + sha256(incident_id.encode()).hexdigest()[:16].upper()
     with db() as conn:
-        conn.execute("BEGIN IMMEDIATE")
+        _begin_capture(conn)
         existing = conn.execute("SELECT case_id FROM events WHERE id=?", (incident_id,)).fetchone()
         if existing:
             return existing["case_id"]
@@ -160,6 +208,7 @@ def capture(record, alert=None, context=None):
         conn.execute("INSERT OR IGNORE INTO cases VALUES(?,?)", (case_id, now()))
         if not asset_key.startswith("unresolved:") and not conn.execute("SELECT 1 FROM assets WHERE id=?", (asset_key,)).fetchone():
             profile = dict(id=asset_key, name=host, address=address, owner="", service="", criticality="unassessed", sensitivity="unassessed", revision=0)
+            profile.update(inventory_profile(asset_key))
             conn.execute("INSERT INTO assets VALUES(?,?,0)", (asset_key, encode(profile)))
         payload = dict(incident_id=incident_id, source_alert_id=record.get("source_alert_id", ""),
                        host=host, rule_name=record.get("rule_name", "Security alert"), rule_id=rule_key,
@@ -167,6 +216,9 @@ def capture(record, alert=None, context=None):
                        source_ip=source, account=account, event_time=event_time,
                        time_basis="report_created_utc" if legacy else "source_event",
                        report=record.get("analyst_notes", ""), fallback_used=record.get("fallback_used"),
+                       provider=record.get("llm_provider"), model=record.get("llm_model"),
+                       report_provenance=record.get("report_provenance") or {},
+                       rule_mappings=record.get("rule_mappings") or {},
                        findings=[], limitations=[], asset_id=asset_key, captured_at=now())
         if legacy:
             payload["limitations"] = ["Archived report only. Original alert and complete tool responses are unavailable here; report citations are not verified."]
@@ -179,6 +231,8 @@ def capture(record, alert=None, context=None):
                 payload["findings"] = [{"observation": "Wazuh recorded this rule on the observed asset. Cause and compromise are not established by the alert alone.", "evidence": ["A1"], "origin": "runtime observation"}]
                 payload["limitations"].append("No validated structured model findings were recorded. Read the report as preliminary triage.")
             payload["limitations"].extend(context.get("audit_warnings", []))
+            if context.get("tool_policy_note"):
+                payload["limitations"].append(context["tool_policy_note"])
             if stamp is None:
                 payload["limitations"].append("Source timestamp is missing, invalid or lacks a timezone; automatic correlation disabled.")
         conn.execute("INSERT INTO events VALUES(?,?,?,?,?,?,?,?,?,?,?)", (incident_id, case_id, asset_key, rule_key, source, account, stamp, now(), int(legacy), reason, encode(payload)))

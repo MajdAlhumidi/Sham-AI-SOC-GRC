@@ -155,7 +155,8 @@ class OllamaReportTests(unittest.TestCase):
                             tool("inspect_network_connections", agent_id="000")]),
             response(json.dumps(valid_assessment())),
         ])
-        self.assertEqual(dispatch.call_count, 2)
+        self.assertEqual(dispatch.call_count, 1)
+        self.assertEqual(ctx["tool_results"][1]["status"], "blocked")
         self.assertEqual(ctx["tool_calls"], 2)
 
     def test_blocked_tool_cannot_be_the_only_support_for_a_finding(self):

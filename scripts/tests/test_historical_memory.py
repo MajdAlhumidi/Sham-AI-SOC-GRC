@@ -38,7 +38,8 @@ class HistoricalMemoryTests(unittest.TestCase):
         self.assertIn('do not establish unauthorized access', rendered)
         self.assertIn('### 5. Containment & Remediation Status\nNOT_EXECUTED', rendered)
         packet = evidence_packet({'rule': {'description': 'Router authentication failure'}}, context)
-        self.assertEqual([x['incident_id'] for x in packet['T1']['value']['historical_cases']], ['INC-OLD-A', 'INC-OLD-B'])
+        self.assertEqual(packet['T1']['value']['historical_cases'], [])
+        self.assertEqual([x['incident_id'] for x in packet['T1']['value']['unreviewed_cases']], ['INC-OLD-A', 'INC-OLD-B'])
         self.assertNotIn('truncated', packet['T1']['value'])
 
     def test_absent_empty_and_failed_searches_are_not_matches(self):
@@ -67,7 +68,8 @@ class HistoricalMemoryTests(unittest.TestCase):
             'metadatas': [[
                 {'source_alert_id': 'current-alert', 'rule_name': 'Router authentication failure'},
                 {'rule_name': 'Unrelated rule'},
-                {'incident_id': 'INC-STALE-METADATA', 'rule_name': 'Router authentication failure'},
+                {'incident_id': 'INC-STALE-METADATA', 'rule_name': 'Router authentication failure',
+                 'human_review_status': 'verified', 'human_classification': 'benign'},
                 {'rule_name': 'Router authentication failure'},
             ]], 'distances': [[.01, .02, .18, .19]],
         })
@@ -79,7 +81,9 @@ class HistoricalMemoryTests(unittest.TestCase):
         with patch.dict(sys.modules, {'vector_store': vector, 'threat_intel': intel}):
             spec.loader.exec_module(module)
         result = json.loads(module.search_historical_incidents('router', 2, 'Router authentication failure', 'current-alert'))
-        self.assertEqual([x['incident_id'] for x in result['historical_cases']], ['INC-OLD-A', 'INC-OLD-B'])
+        self.assertEqual([x['incident_id'] for x in result['historical_cases']], ['INC-OLD-A'])
+        self.assertEqual(result['historical_cases'][0]['classification'], 'benign')
+        self.assertEqual([x['incident_id'] for x in result['unreviewed_cases']], ['INC-OLD-B'])
         self.assertEqual(result['match_basis'], 'same_rule_vector_search')
         self.assertEqual(vector.search_incidents.call_args.kwargs['rule_name'], 'Router authentication failure')
         intel.check_ip_reputation.assert_not_called()

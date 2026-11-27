@@ -10,6 +10,12 @@ from datetime import datetime, timezone
 from typing import Any, List, Tuple
 
 import requests
+if __package__:
+    from .alert_context import collector_type, external_lookup_note, ip_scope, resolve_alert_asset, untrusted_data
+    from .casework.export import redact_for_output
+else:
+    from alert_context import collector_type, external_lookup_note, ip_scope, resolve_alert_asset, untrusted_data
+    from casework.export import redact_for_output
 
 READ_ONLY_TOOL_NAMES = {
     "search_historical_incidents",
@@ -24,6 +30,7 @@ EVIDENCE_TOOL_NAMES = {
     "inspect_network_connections",
     "search_related_agent_logs",
 }
+HOST_TOOLS = {"inspect_process_tree", "inspect_network_connections"}
 
 TOOL_SCHEMAS = [
     {"type": "function", "function": {
@@ -79,7 +86,7 @@ def _max_tool_calls() -> int:
 
 
 def _new_context(alert: dict, incident_id: str) -> dict:
-    return {"alert": alert, "incident_id": incident_id, "max_tool_calls": _max_tool_calls(),
+    return {"alert": alert, "incident_id": incident_id, "asset_type": collector_type(alert), "max_tool_calls": _max_tool_calls(),
             "tool_calls": 0, "tool_results": []}
 
 
@@ -92,14 +99,14 @@ def _write_audit_event(event: dict) -> bool:
             os.makedirs(directory, exist_ok=True)
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         with os.fdopen(fd, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
+            handle.write(json.dumps(redact_for_output(event), ensure_ascii=False, default=str) + "\n")
         try:
             os.chmod(path, 0o600)
         except OSError:
             pass
         return True
     except Exception as exc:
-        print(f"[AUDIT-ERROR] Could not append tool audit event: {exc}", flush=True)
+        print(f"[AUDIT-ERROR] Could not append tool audit event ({type(exc).__name__}).", flush=True)
         return False
 
 
@@ -134,6 +141,12 @@ def _observed_iocs(context: dict) -> Tuple[set, set]:
             evidence[item["tool_name"]] = item.get("result", "")
     text_blob = json.dumps(evidence, ensure_ascii=False, default=str)
     ips = set()
+    data = context.get("alert", {}).get("data") or {}
+    for key in ("srcip", "dstip", "src_ip", "dst_ip"):
+        try:
+            ips.add(str(ipaddress.ip_address(str(data.get(key) or ""))))
+        except ValueError:
+            pass
     for value in re.findall(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])", text_blob):
         try:
             ips.add(str(ipaddress.ip_address(value)))
@@ -175,6 +188,10 @@ def _validate_arguments(context: dict, name: str, arguments: dict) -> Tuple[dict
         args['exclude_source_alert_id'] = str(context['alert'].get('id') or '') or None
 
     if name in {"search_related_agent_logs", "inspect_process_tree", "inspect_network_connections"}:
+        alert = context.get("alert", {})
+        asset_type = collector_type(alert)
+        if name in HOST_TOOLS and asset_type != "host_agent":
+            return {}, f"Skipped host-only tool for collector type {asset_type}."
         expected = str((context.get("alert", {}).get("agent") or {}).get("id", "")).strip()
         supplied = str(args.get("agent_id", "")).strip()
         if not expected:
@@ -192,6 +209,15 @@ def _validate_arguments(context: dict, name: str, arguments: dict) -> Tuple[dict
             if not query:
                 return {}, "A non-empty context query is required."
             args["query"] = query[:500]
+            if asset_type != "host_agent":
+                source = str((alert.get("data") or {}).get("srcip") or (alert.get("data") or {}).get("src_ip") or "")
+                location = resolve_alert_asset(alert)["ip"] if asset_type == "remote_syslog" else ""
+                if ip_scope(source) != "invalid":
+                    args["source_ip"] = str(ipaddress.ip_address(source))
+                if ip_scope(location) != "invalid":
+                    args["location"] = location
+                if "source_ip" not in args and "location" not in args:
+                    return {}, f"Skipped collector-wide search for {asset_type} without an observed correlation field."
 
     if name == "check_ip_reputation":
         try:
@@ -200,8 +226,8 @@ def _validate_arguments(context: dict, name: str, arguments: dict) -> Tuple[dict
             return {}, "The supplied value is not a valid IP address."
         # Do not disclose private, loopback, link-local, reserved, or documentation
         # addresses to third-party threat-intelligence providers.
-        if not candidate_ip.is_global:
-            return {}, "Threat-intelligence lookup blocked: only globally routable public IPs may be sent to external providers."
+        if ip_scope(str(candidate_ip)) != "public":
+            return {}, external_lookup_note(str(candidate_ip))
         candidate = str(candidate_ip)
         ips, _ = _observed_iocs(context)
         if candidate not in ips:
@@ -247,7 +273,7 @@ def _execute_tool(context: dict, name: str, arguments: dict) -> str:
             status = _result_status(result)
         except Exception as exc:
             status = "error"
-            result = json.dumps({"status": "error", "message": f"Tool execution failed: {exc}"}, ensure_ascii=False)
+            result = json.dumps({"status": "error", "message": f"Tool execution failed ({type(exc).__name__})."}, ensure_ascii=False)
 
     event = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -275,6 +301,14 @@ def prepare_investigation_context(alert: dict, incident_id: str) -> dict:
     context = _new_context(alert, incident_id)
     query = str((alert.get('rule') or {}).get('description') or alert.get('full_log') or 'Security alert')[:1000]
     _execute_tool(context, 'search_historical_incidents', {'query': query, 'n_results': 2})
+    if context["asset_type"] in {"remote_syslog", "wazuh_manager"}:
+        note = f"Skipped host-only tools for collector type {context['asset_type']}."
+        context["tool_policy_note"] = note
+        if not _write_audit_event({
+            "timestamp": datetime.now(timezone.utc).isoformat(), "incident_id": incident_id,
+            "tool_name": "host_tool_policy", "status": "skipped", "result_excerpt": note,
+        }):
+            context.setdefault("audit_warnings", []).append("Host-tool policy could not be written to the durable audit log.")
     return context
 
 
@@ -308,10 +342,10 @@ def make_gemini_tools(alert: dict, incident_id: str, context=None) -> Tuple[List
         """Check a hash observed in the alert or collected evidence."""
         return _execute_tool(context, "inspect_file_hash", {"file_hash": file_hash})
 
-    return [
-        search_historical_incidents, search_related_agent_logs, inspect_process_tree,
-        inspect_network_connections, check_ip_reputation, inspect_file_hash,
-    ], context
+    tools = [search_historical_incidents, search_related_agent_logs, check_ip_reputation, inspect_file_hash]
+    if collector_type(alert) == "host_agent":
+        tools.extend([inspect_process_tree, inspect_network_connections])
+    return tools, context
 
 
 class OllamaInvestigationError(RuntimeError):
@@ -326,11 +360,13 @@ def _ollama_tools(context):
     import copy
     expected = str((context["alert"].get("agent") or {}).get("id", "")).strip()
     ips, hashes = _observed_iocs(context)
-    public_ips = sorted(ip for ip in ips if ipaddress.ip_address(ip).is_global)
+    public_ips = sorted(ip for ip in ips if ip_scope(ip) == "public")
     tools = []
     for original in TOOL_SCHEMAS:
         tool = copy.deepcopy(original)
         fn = tool["function"]
+        if fn["name"] in HOST_TOOLS and collector_type(context["alert"]) != "host_agent":
+            continue
         if fn['name'] == 'search_historical_incidents' and any(
             x.get('tool_name') == 'search_historical_incidents' for x in context.get('tool_results', [])
         ):
@@ -376,6 +412,10 @@ def _ollama_chat(messages, context, phase, *, tools=None, schema=None):
         "phase": phase, "done_reason": payload.get("done_reason"),
         "prompt_tokens": payload.get("prompt_eval_count"), "output_tokens": payload.get("eval_count"),
     })
+    if isinstance(payload.get("model"), str):
+        context["llm_model"] = payload["model"][:200]
+    if isinstance(payload.get("model_version"), str):
+        context["llm_model_version"] = payload["model_version"][:200]
     if payload.get("done_reason") == "length" or payload.get("done") is False:
         raise ValueError("Ollama response was truncated before completion")
     return payload["message"]
@@ -403,9 +443,9 @@ MITRE must be empty unless a technique ID is present in structured rule.mitre.id
 Do not claim executed containment or case creation. These statuses are owned by the runtime.
 Be concise: at most three evidence-backed findings, zero hypotheses, two limitations, and three recommendations.
 """
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": json.dumps({
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": untrusted_data({
         "evidence": packet, "output_schema": schema,
-    }, ensure_ascii=False, default=str)}]
+    }, "EVIDENCE")}]
     for attempt in range(2):
         try:
             message = _ollama_chat(messages, context, "report", schema=schema)
@@ -448,8 +488,8 @@ def run_dynamic_ollama_agent(alert: dict, system_prompt: str, incident_id: str, 
         "Do not repeat an identical query. Never claim containment or external case creation. "
         f"The exact agent_id is {expected!r}; the agent name is NOT its ID. "
         "Only observed, globally routable IPs may be sent to reputation tools."
-    )}, {"role": "user", "content": json.dumps({"alert": compact_evidence(alert),
-        "already_collected_evidence": {key: value for key, value in evidence_packet(alert, context).items() if key != 'A1'}}, ensure_ascii=False, default=str)}]
+    )}, {"role": "user", "content": untrusted_data({"alert": compact_evidence(alert),
+        "already_collected_evidence": {key: value for key, value in evidence_packet(alert, context).items() if key != 'A1'}})}]
     malformed_retries = 0
     try:
         while context["tool_calls"] < context["max_tool_calls"]:
@@ -486,7 +526,12 @@ def run_dynamic_ollama_agent(alert: dict, system_prompt: str, incident_id: str, 
                         arguments = {}
                 result = _execute_tool(context, name, arguments)
                 # Ollama uses tool_name, not the OpenAI-style name field.
-                messages.append({"role": "tool", "tool_name": name, "content": result if len(result) <= 900 else result[:900] + " [tool result truncated]"})
+                excerpt = result if len(result) <= 900 else result[:900] + " [tool result truncated]"
+                try:
+                    excerpt = json.loads(excerpt)
+                except ValueError:
+                    pass
+                messages.append({"role": "tool", "tool_name": name, "content": untrusted_data(excerpt, "TOOL")})
         report = _synthesize_ollama_report(alert, system_prompt, context)
         return report, context
     except Exception as exc:

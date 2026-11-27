@@ -5,7 +5,7 @@ import uuid
 from typing import Optional
 
 from .audit import record_audit
-from .db import utc_now
+from .db import append_chain_entry, utc_now
 
 
 def insert_evidence(
@@ -22,6 +22,7 @@ def insert_evidence(
         (evidence_id, risk_id, control_id, source, reference_id, description,
          sha256, json.dumps(metadata, ensure_ascii=False, default=str), collected_by, utc_now()),
     )
+    append_chain_entry(connection, "evidence", evidence_id)
     record_audit(
         connection, collected_by, "evidence.recorded", "evidence", evidence_id,
         after={"source": source, "reference_id": reference_id,

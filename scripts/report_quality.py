@@ -7,6 +7,10 @@ from __future__ import annotations
 
 import re
 from typing import List, Tuple
+if __package__:
+    from .alert_context import collector_type
+else:
+    from alert_context import collector_type
 
 
 _SECTION_PATTERNS = [
@@ -58,6 +62,16 @@ def evaluate_report_quality(report_text: str) -> Tuple[bool, List[str]]:
     if not _CLASSIFICATION_PATTERN.search(text):
         issues.append("No supported explicit classification was found.")
     return not issues, issues
+
+
+def analyst_steps(alert, proposed):
+    if collector_type(alert) in {"remote_syslog", "wazuh_manager"}:
+        return [
+            "Review matching Wazuh events for the observed source and affected device.",
+            "Confirm the event time and account with the analyst responsible for the device.",
+            "Keep the Wazuh Manager available for evidence collection.",
+        ]
+    return proposed
 
 
 def append_output_quality_gate(report_text: str) -> str:

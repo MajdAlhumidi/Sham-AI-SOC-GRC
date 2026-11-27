@@ -1,8 +1,11 @@
 import os
 import re
-import ipaddress
 import requests
 from dotenv import load_dotenv
+if __package__:
+    from .alert_context import external_lookup_note, ip_scope
+else:
+    from alert_context import external_lookup_note, ip_scope
 
 load_dotenv()
 
@@ -13,11 +16,7 @@ GREYNOISE_KEY = os.getenv("GREYNOISE_API_KEY")
 
 def is_valid_public_ip(ip: str) -> bool:
     """التحقق من صحة الـ IP وتجاهل الشبكات الداخلية والـ Loopback."""
-    try:
-        ip_obj = ipaddress.ip_address(ip)
-        return not (ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_reserved)
-    except ValueError:
-        return False
+    return ip_scope(ip) == "public"
 
 
 def is_valid_hash(file_hash: str) -> bool:
@@ -138,22 +137,14 @@ def check_greynoise(ip: str) -> dict:
 def check_ip_reputation(ip: str) -> dict:
     """Do not treat missing credentials or failed provider requests as a clean reputation result."""
     if not is_valid_public_ip(ip):
-        try:
-            address = ipaddress.ip_address(ip)
-            classification = (
-                "INTERNAL_OR_PRIVATE"
-                if address.is_private or address.is_loopback
-                else "NON_PUBLIC_OR_RESERVED"
-            )
-        except ValueError:
-            classification = "INVALID_IP"
+        classification = ip_scope(ip).upper()
         return {
             "status": "not_applicable",
             "ip": ip,
             "classification": classification,
             "severity": "INFORMATIONAL",
             "recommended_action": "MANUAL_REVIEW",
-            "details": "External reputation lookup was not performed for an invalid, private, loopback, or reserved address.",
+            "details": external_lookup_note(ip),
         }
 
     abuse = check_abuseipdb(ip)
@@ -250,11 +241,11 @@ def check_file_hash(file_hash: str) -> dict:
             if malicious >= 3:
                 classification = "MALICIOUS_BINARY"
                 severity = "CRITICAL"
-                action = "KILL_PROCESS_AND_QUARANTINE"
+                action = "MANUAL_REVIEW"
             elif malicious in (1, 2) or suspicious > 0:
                 classification = "SUSPICIOUS_BINARY"
                 severity = "HIGH"
-                action = "ISOLATE_HOST_AND_INSPECT"
+                action = "SUBMIT_TO_SANDBOX"
             else:
                 classification = "BENIGN_FILE"
                 severity = "LOW"

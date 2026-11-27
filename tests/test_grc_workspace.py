@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
-from scripts.api_server import app
+from scripts.api_server import create_app
 from scripts.grc.db import db_session
 from scripts.dashboard import render_dashboard
 
@@ -16,7 +16,7 @@ class GRCWorkspaceTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.env = patch.dict(os.environ, {'GRC_DB_PATH': str(Path(self.directory.name)/'grc.sqlite3'), 'SOC_GRC_API_TOKEN': 'private-workspace-test-token'})
         self.env.start()
-        self.client = TestClient(app)
+        self.client = TestClient(create_app(), base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000))
         self.client.__enter__()
         self.headers = {}
         self.base = '/api/grc/workspace'

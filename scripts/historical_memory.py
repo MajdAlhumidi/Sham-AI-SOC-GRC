@@ -8,8 +8,8 @@ def compact_history(result):
     """Keep identifiers intact instead of truncating JSON after a long report."""
     if not isinstance(result, dict):
         return {'status': 'error', 'historical_cases': []}
-    cases = []
-    for item in (result.get('historical_cases') or [])[:5]:
+    cases, unreviewed = [], []
+    for item in [*(result.get('historical_cases') or [])[:5], *(result.get('unreviewed_cases') or [])[:5]]:
         if not isinstance(item, dict) or not item.get('incident_id'):
             continue
         case = {key: str(item.get(key) or 'unknown')[:160] for key in
@@ -18,9 +18,11 @@ def compact_history(result):
         distance = item.get('similarity_distance')
         if isinstance(distance, (int, float)) and math.isfinite(distance):
             case['similarity_distance'] = round(distance, 4)
-        cases.append(case)
+        target = cases if case['human_review_status'] == 'verified' else unreviewed
+        if len(target) < 5:
+            target.append(case)
     return {'status': result.get('status', 'error'), 'match_basis': result.get('match_basis', ''),
-            'matches_count': len(cases), 'historical_cases': cases}
+            'matches_count': len(cases), 'historical_cases': cases, 'unreviewed_cases': unreviewed}
 
 
 def _line(value):
@@ -43,8 +45,12 @@ def render_historical_memory(context):
             lines.append(f'- **Search**: Unavailable or failed; no historical match is asserted. {ref}')
             continue
         cases = result['historical_cases']
+        for case in result.get('unreviewed_cases', []):
+            lines.append(f"- **Unreviewed context**: `{_line(case['incident_id'])}` (review status: {_line(case['human_review_status'])}). {ref}")
         if not cases:
-            lines.append(f'- **Match**: No eligible historical incidents were returned by the vector search. {ref}')
+            lines.append(f'- **Match**: No eligible historical incidents with authenticated reviews were returned by the vector search. {ref}')
+            if result.get('unreviewed_cases'):
+                lines.append('- **Interpretation**: Shared rules or text similarity do not establish unauthorized access, compromise, or a common actor.')
             continue
         ids = ', '.join('`'+_line(x['incident_id'])+'`' for x in cases)
         rules = list(dict.fromkeys(_line(x['rule_name']) for x in cases if x['rule_name']))

@@ -1,6 +1,8 @@
 """Case follow-up, portable evidence and isolated comparison endpoints."""
+from functools import partial
 from typing import Literal
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Response
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 router = APIRouter()
@@ -58,21 +60,33 @@ def ask_followup(case_id: str, payload: FollowupInput, background: BackgroundTas
     return turn
 
 
+class EvidenceDownload(StreamingResponse):
+    def __init__(self, output, filename):
+        self.output = output
+        super().__init__(iter(partial(output.read, 64 * 1024), b""), media_type="application/zip", headers={
+            "Content-Disposition": 'attachment; filename="' + filename + '"',
+            "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+        })
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self.output.close()
+
+
 @router.get("/cases/{case_id}/export")
-def export_case(case_id: str):
-    from .export import ExportLimitError, build_bundle
+def export_case(case_id: str, request: Request):
+    from .export import ExportLimitError, open_bundle
     try:
-        content, filename = build_bundle(case_id)
+        output, filename = open_bundle(case_id, credentials=request.app.state.security.credentials)
     except KeyError:
         raise HTTPException(404, "Case not found")
     except ExportLimitError as exc:
         raise HTTPException(413, str(exc))
     except ValueError as exc:
         raise HTTPException(422, str(exc))
-    return Response(content, media_type="application/zip", headers={
-        "Content-Disposition": 'attachment; filename="'+filename+'"',
-        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
-    })
+    return EvidenceDownload(output, filename)
 
 
 class TrialInput(BaseModel):

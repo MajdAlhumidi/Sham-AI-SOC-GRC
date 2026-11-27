@@ -7,9 +7,10 @@ from __future__ import annotations
 
 from hashlib import sha256
 from html import escape
-from io import BytesIO
+from tempfile import TemporaryFile
 import importlib
 import json
+import os
 import re
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -22,6 +23,7 @@ MAX_FOLLOWUPS = 40
 MAX_SOURCE_BYTES = 8 * 1024 * 1024
 MAX_RECORD_BYTES = 1024 * 1024
 MAX_OUTPUT_BYTES = 16 * 1024 * 1024
+MAX_COMPRESSED_BYTES = 17 * 1024 * 1024
 MAX_FILES = 1600
 REDACTED = "[REDACTED]"
 
@@ -41,6 +43,7 @@ def _key_secret(key):
 _ASSIGNMENT = re.compile(
     r'''(?im)(\b(?:[a-z0-9_.-]*(?:password|passwd|passphrase|secret|credential|api[_-]?key|access[_-]?key|token)[a-z0-9_.-]*|pwd|authorization|proxy-authorization|cookie|set-cookie)(?:[\\]*["'])?\s*[:=]\s*)[^\r\n]*''')
 _AUTH_VALUE = re.compile(r"(?i)\b(Bearer|Basic)\s+[a-z0-9._~+/-]+=*")
+_JWT = re.compile(r"\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*")
 _PRIVATE_KEY = re.compile(r"-----BEGIN [^-\r\n]*PRIVATE KEY-----.*?(?:-----END [^-\r\n]*PRIVATE KEY-----|\Z)", re.S)
 _URL_CREDENTIALS = re.compile(r"(?i)([a-z][a-z0-9+.-]*://)[^\s/@]+(?::[^\s/@]*)?@")
 _AWS_KEY = re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b")
@@ -88,11 +91,28 @@ def _redact(value, known=(), depth=0):
         text = _URL_CREDENTIALS.sub(lambda m: m[1] + REDACTED + "@", text)
         text = _ASSIGNMENT.sub(lambda m: m[1] + REDACTED, text)
         text = _AUTH_VALUE.sub(lambda m: m[1] + " " + REDACTED, text)
+        text = _JWT.sub(REDACTED, text)
         text = _AWS_KEY.sub(REDACTED, text)
         for secret in sorted(known, key=len, reverse=True):
             text = text.replace(secret, REDACTED)
         return text
     return value
+
+
+def redact_for_output(value):
+    """Redact diagnostic or outbound data without altering source evidence."""
+    known = _known_secrets(value)
+    known.update(_known_secrets({
+        name: value for name, value in os.environ.items()
+        if name.startswith(("SOC_", "GRC_", "WAZUH_", "THEHIVE_", "GEMINI_", "ABUSEIPDB_", "VIRUSTOTAL_", "GREYNOISE_"))
+    }))
+    try:
+        tokens = json.loads(os.getenv("SOC_API_TOKENS_JSON", "{}"))
+        if isinstance(tokens, dict):
+            known.update(token for token in tokens if len(token) >= 4)
+    except ValueError:
+        pass
+    return _redact(value, known)
 
 
 def _json_bytes(value):
@@ -245,7 +265,10 @@ def _report(case, evidence_index, turns, limitations, audit):
         if not isinstance(record, dict):
             record = {"retained_value": record}
         parts += ['<h3>' + escape(str(event["incident_id"])) + '</h3>',
-                  pre({k: record.get(k, "not recorded") for k in ("event_time", "time_basis", "classification", "provider", "model", "fallback_used", "limitations", "findings")}),
+                  pre({k: record.get(k, "not recorded") for k in (
+                      "event_time", "time_basis", "classification", "provider", "model", "fallback_used",
+                      "report_provenance", "rule_mappings", "limitations", "findings",
+                  )}),
                   pre(record.get("report", "Report unavailable.")), '<p>' + escape(str(event.get("join_reason", ""))) + '</p>']
     parts += ['<h2>Captured evidence index</h2><table><thead><tr><th>Source reference</th><th>Recorded status</th><th>Stored-byte integrity</th><th>Exported record</th></tr></thead><tbody>']
     for item in evidence_index:
@@ -260,8 +283,8 @@ def _report(case, evidence_index, turns, limitations, audit):
     return "".join(parts).encode("utf-8")
 
 
-def build_bundle(case_id):
-    """Return (ZIP bytes, safe attachment filename), or fail explicitly, never partially."""
+def open_bundle(case_id, *, credentials=()):
+    """Build a bounded ZIP in a temporary file and return it ready to stream."""
     if not isinstance(case_id, str) or not case_id or len(case_id) > 240:
         raise ValueError("Use a retained case ID of at most 240 characters.")
     case, evidence, audit, limitations, followup_count = _snapshot(case_id)
@@ -272,6 +295,7 @@ def build_bundle(case_id):
         iterable = captured.items() if isinstance(captured, dict) else enumerate(captured)
         turn_integrity.append({str(ref): _followup_source_integrity(entry) for ref, entry in iterable})
     known = _known_secrets([case, evidence, audit, turns])
+    known.update(value for value in credentials if isinstance(value, str) and len(value) >= 4)
     case, evidence, audit, turns = (_redact(value, known) for value in (case, evidence, audit, turns))
     limitations = _redact(limitations, known)
     limitations += ["Sources are the records captured by this deployment, not independently retrieved originals.",
@@ -285,6 +309,8 @@ def build_bundle(case_id):
 
     def add(path, value, *, media_type="application/json", source=None):
         nonlocal total
+        if not re.fullmatch(r"[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*\.[a-z0-9]+", path):
+            raise ValueError("Unsafe evidence archive entry name.")
         data = value if isinstance(value, bytes) else _json_bytes(value)
         total += len(data)
         if total > MAX_OUTPUT_BYTES or len(files) + 1 > MAX_FILES:
@@ -347,9 +373,25 @@ def build_bundle(case_id):
                 "source_hash_scope": "Initial evidence compares retained UTF-8 JSON bytes before redaction. Complete follow-up record copies use canonical JSON comparisons; bounded snapshots explicitly cannot revalidate original-source fingerprints. These comparisons are separate from exported file hashes.",
                 "limitations": limitations, "files": [file_metadata[path] for path in sorted(files)]}
     add("manifest.json", manifest)
-    output = BytesIO()
-    with ZipFile(output, "w", compression=ZIP_DEFLATED, compresslevel=6) as archive:
-        for path in sorted(files):
-            archive.writestr(path, files[path])
+    output = TemporaryFile(mode="w+b")
+    try:
+        with ZipFile(output, "w", compression=ZIP_DEFLATED, compresslevel=6) as archive:
+            for path in sorted(files):
+                archive.writestr(path, files[path])
+                if output.tell() > MAX_COMPRESSED_BYTES:
+                    raise ExportLimitError("Export limit: compressed bytes exceeded.")
+        if output.tell() > MAX_COMPRESSED_BYTES:
+            raise ExportLimitError("Export limit: compressed bytes exceeded.")
+        output.seek(0)
+    except BaseException:
+        output.close()
+        raise
     slug = re.sub(r"[^A-Za-z0-9_-]", "_", case_id)[:80].strip("_") or "case"
-    return output.getvalue(), slug + "-evidence.zip"
+    return output, slug + "-evidence.zip"
+
+
+def build_bundle(case_id):
+    """Return the bounded ZIP as bytes for existing local callers."""
+    output, filename = open_bundle(case_id)
+    with output:
+        return output.read(), filename

@@ -164,6 +164,7 @@ __CASE_STYLES__
     <div class="head-right">
       <span class="live"><i></i>STREAM ACTIVE</span>
       <span class="clock" id="clock-display" title="Device local time">--:--:--</span>
+      __SIGN_OUT__
     </div>
   </header>
 
@@ -256,6 +257,16 @@ __CASE_VIEW__
     const allIncidents = __JSON_DATA__;
     let currentFilter = "All";
     let searchQuery = "";
+    document.getElementById('sham-sign-out')?.addEventListener('click', async (event) => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      try {
+        const response = await fetch('/api/auth/logout', {method: 'POST'});
+        if (response.ok) { window.location.reload(); return; }
+      } catch (_) {}
+      button.textContent = 'Retry sign out';
+      button.disabled = false;
+    });
 
     const clockDisplay = document.getElementById('clock-display');
     function updateClock() {
@@ -479,7 +490,7 @@ def severity_cell(lvl: int) -> str:
         return f'<span class="sev sev-med">◆ MED {lvl}</span>'
     return f'<span class="sev sev-low">● LOW {lvl}</span>'
 
-def render_dashboard(incidents):
+def render_dashboard(incidents, *, signed_in=False):
     total = len(incidents)
     tp_count = sum(1 for x in incidents if "critical" in x["verdict"].lower() or "tp" in x["verdict"].lower())
     fp_count = sum(1 for x in incidents if "benign" in x["verdict"].lower() or "fp" in x["verdict"].lower())
@@ -515,6 +526,7 @@ def render_dashboard(incidents):
 
     rendered = (
         HTML_TEMPLATE
+        .replace("__SIGN_OUT__", '<button class="mode-tab" id="sham-sign-out">Sign out</button>' if signed_in else '')
         .replace("__TABLE_ROWS__", rows_str)
         .replace("__METRIC_TOTAL__", str(total))
         .replace("__METRIC_TP__", str(tp_count))

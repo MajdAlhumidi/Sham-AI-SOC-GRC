@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 from zipfile import ZipFile
 from fastapi.testclient import TestClient
-from scripts.api_server import app
+from scripts.api_server import create_app
 from scripts.casework import store, followup, benchmark
 
 
@@ -21,7 +21,7 @@ class CaseExtensionsAPITests(unittest.TestCase):
             "SOC_BENCHMARK_DB_PATH": str(Path(self.temp.name)/"comparison.sqlite"),
         })
         self.env.start()
-        self.client = TestClient(app)
+        self.client = TestClient(create_app(), base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000))
         self.client.__enter__()
         alert = {"id":"wazuh-extension","timestamp":"2026-11-20T12:00:00Z", "agent":{"id":"001","name":"LAB"},
                  "rule":{"id":"5710","description":"Authentication failure","level":5},

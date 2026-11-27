@@ -9,12 +9,22 @@ from scripts import api_server, indexer_tool
 
 
 class RuntimeCompatibilityTests(unittest.TestCase):
+    def test_insecure_indexer_requires_local_lab_override(self):
+        with patch.object(indexer_tool, "INDEXER_VERIFY_TLS", False):
+            with patch.dict(os.environ, {"SOC_ALLOW_INSECURE_TLS_LAB": "false"}):
+                with self.assertRaisesRegex(ValueError, "verified HTTPS"):
+                    indexer_tool.validate_indexer_config()
+            with patch.dict(os.environ, {"SOC_ALLOW_INSECURE_TLS_LAB": "true"}):
+                indexer_tool.validate_indexer_config()
+                with self.assertRaisesRegex(ValueError, "verified HTTPS"):
+                    indexer_tool.validate_indexer_config(production=True)
+
     def test_sync_endpoint_keeps_existing_incident_shape(self):
         records = [{"case_id": "legacy-incident", "verdict": "Suspicious / Review"}]
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
             "GRC_DB_PATH": os.path.join(directory, "grc.sqlite3"),
         }), patch.object(api_server, "get_real_incidents_from_chroma", return_value=records):
-            with TestClient(api_server.app) as client:
+            with TestClient(api_server.create_app(), base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000)) as client:
                 response = client.get("/api/incidents")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"incidents": records})

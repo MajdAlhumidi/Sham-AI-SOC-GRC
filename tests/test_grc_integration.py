@@ -13,7 +13,7 @@ from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
 
-from scripts.api_server import app
+from scripts.api_server import create_app
 from scripts.grc.db import db_session
 from scripts.grc.integration import sync_incident
 from scripts.schema import IncidentRecord
@@ -52,7 +52,7 @@ class GRCIntegrationTests(unittest.TestCase):
             "SOC_AUDIT_LOG_PATH": str(Path(self.directory.name) / 'tool-audit.jsonl'),
         })
         self.environment.start()
-        self.client = TestClient(app)
+        self.client = TestClient(create_app(), base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000))
         self.client.__enter__()
         self.headers = {}
         self.alert = {
@@ -114,7 +114,11 @@ class GRCIntegrationTests(unittest.TestCase):
         self.assertEqual(assessment["metadata"]["llm_provider"], "ollama")
 
     def test_real_soc_hook_and_human_review_preserve_separate_decisions(self):
-        from scripts import investigation_agent, report_quality, schema, alert_context, historical_memory
+        from hashlib import sha256
+        from io import BytesIO
+        from zipfile import ZipFile
+
+        from scripts import investigation_agent, report_quality, schema, alert_context, historical_memory, ollama_reporting
 
         vector = types.ModuleType("vector_store")
         vector.store_incidents = Mock()
@@ -129,6 +133,7 @@ class GRCIntegrationTests(unittest.TestCase):
             "investigation_agent": investigation_agent, "report_quality": report_quality,
             "alert_context": alert_context,
             "historical_memory": historical_memory,
+            "ollama_reporting": ollama_reporting,
             "grc": scripts.grc, "grc.integration": scripts.grc.integration,
         }
         spec = importlib.util.spec_from_file_location(
@@ -144,6 +149,7 @@ class GRCIntegrationTests(unittest.TestCase):
             'full_log': 'system,error,critical MOKROTIK-STAR: login failure for user admin from 192.0.2.10 via winbox',
         })
         self.alert['rule']['mitre'] = {'id': ['T1110']}
+        self.alert['rule']['pci_dss'] = ['10.2.4']
         fallback = soc.generate_fallback_report(self.alert, 'test unavailable model')
         self.assertIn('**Affected Host**: `MOKROTIK-STAR`', fallback)
         self.assertIn('**T1110** (rule-supplied mapping)', fallback)
@@ -152,7 +158,7 @@ class GRCIntegrationTests(unittest.TestCase):
         payload = notify_post.call_args.kwargs['json']
         self.assertEqual(payload['target_host'], 'MOKROTIK-STAR')
         self.assertEqual(payload['user'], 'admin')
-        with patch('scripts.api_server.get_real_incidents_from_chroma', return_value=[]), self.client.websocket_connect('/ws') as ws:
+        with patch('scripts.api_server.get_real_incidents_from_chroma', return_value=[]), self.client.websocket_connect('ws://127.0.0.1:8000/ws') as ws:
             ws.receive_json()
             self.assertEqual(self.client.post('/api/broadcast', json=payload).status_code, 200)
             live = ws.receive_json()['incident']
@@ -179,6 +185,11 @@ class GRCIntegrationTests(unittest.TestCase):
         self.assertEqual(saved.to_metadata()["source_alert_id"], self.alert["id"])
         self.assertEqual(second.to_metadata()["source_alert_id"], "alert-456")
         self.assertEqual(saved.containment_status, "NOT_EXECUTED")
+        self.assertEqual(saved.rule_mappings["pci_dss"], ["10.2.4"])
+        self.assertEqual(saved.report_provenance["provider"], "ollama")
+        self.assertEqual(saved.report_provenance["validated_report_sha256"],
+                         sha256(saved.analyst_notes.encode("utf-8")).hexdigest())
+        self.assertIn("Compliance & GRC Mapping", saved.analyst_notes)
         self.assertEqual(saved.target_host, 'MOKROTIK-STAR')
         self.assertEqual(saved.to_metadata()['target_host'], 'MOKROTIK-STAR')
         self.assertEqual(saved.destination_ip, '10.8.0.2')
@@ -195,9 +206,22 @@ class GRCIntegrationTests(unittest.TestCase):
         offline = vector.store_incidents.call_args.args[0][0]
         self.assertTrue(offline.fallback_used)
         self.assertIn('INC-TEST-OLD', offline.analyst_notes)
+        self.assertIn("Skipped host-only tools for collector type remote_syslog", offline.analyst_notes)
+        self.assertEqual(offline.report_provenance["generation_method"], "deterministic_fallback")
         self.assertNotIn('Fallback Heuristic Record', offline.analyst_notes)
         self.assertIn('search_historical_incidents — status: success', offline.analyst_notes)
         self.assertTrue(report_quality.evaluate_report_quality(offline.analyst_notes)[0])
+        case_lookup = self.client.get(f"/api/investigations/incidents/{offline.incident_id}")
+        self.assertEqual(case_lookup.status_code, 200)
+        case_id = case_lookup.json()["case_id"]
+        export_response = self.client.get(f"/api/investigations/cases/{case_id}/export")
+        self.assertEqual(export_response.status_code, 200)
+        with ZipFile(BytesIO(export_response.content)) as archive:
+            manifest = json.loads(archive.read("manifest.json"))
+            for entry in manifest["files"]:
+                self.assertEqual(sha256(archive.read(entry["path"])).hexdigest(), entry["sha256"])
+            self.assertIn(b"NOT_EXECUTED", archive.read("report.html"))
+            self.assertIn(b"deterministic_fallback", archive.read("report.html"))
         response = self.client.post("/api/reviews", headers={"X-Review-Token": "test-review-token"}, json={
             "incident_id": saved.incident_id, "agent_classification": "suspicious",
             "decision": "corrected", "final_classification": "false_positive",

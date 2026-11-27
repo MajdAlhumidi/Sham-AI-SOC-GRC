@@ -1,4 +1,5 @@
 import chromadb
+import os
 from chromadb.utils import embedding_functions
 if __package__:
     from .schema import IncidentRecord
@@ -6,7 +7,7 @@ else:
     from schema import IncidentRecord
 
 # 1. إعداد التخزين الدائم
-client = chromadb.PersistentClient(path="./incident_vector_db")
+client = chromadb.PersistentClient(path=os.getenv("SOC_VECTOR_DB_PATH", "./incident_vector_db"))
 
 # 2. تحميل نموذج التضمين الدلالي
 emb_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
@@ -28,12 +29,15 @@ def store_incidents(records: list[IncidentRecord]):
     collection.add(ids=ids, documents=docs, metadatas=metas)
     print(f"[+] Successfully stored {len(records)} incidents.")
 
-def search_incidents(query_text: str, n_results: int = 1, filter_type: str = None, rule_name: str = None):
+def search_incidents(query_text: str, n_results: int = 1, filter_type: str = None, rule_name: str = None,
+                     human_review_status: str = None):
     filters = []
     if filter_type:
         filters.append({'classification': filter_type})
     if rule_name:
         filters.append({'rule_name': rule_name})
+    if human_review_status:
+        filters.append({'human_review_status': human_review_status})
     where_filter = {'$and': filters} if len(filters) > 1 else (filters[0] if filters else None)
     
     results = collection.query(

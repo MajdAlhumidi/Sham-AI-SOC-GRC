@@ -39,7 +39,7 @@ See [case follow-ups and evidence](docs/case-followups-and-evidence.md) and
 | Human review | Protected API records `accepted`, `corrected`, or `escalated` decisions separately from AI suggestions. |
 | GRC foundation | SQLite-backed risk register, control catalogue, evidence, approval records, and audit events. |
 | SOC-to-GRC connection | Opt-in synchronization of incident provenance and human decisions into GRC evidence. |
-| Case management | Optional TheHive case creation after report validation and explicit configuration. |
+| Case management | Optional TheHive case creation after report validation and an authenticated approval for that incident. |
 
 ### Investigation boundaries
 
@@ -267,16 +267,19 @@ Reviews are appended to JSONL with restrictive file permissions where supported.
 | AbuseIPDB | `ABUSEIPDB_API_KEY` | Public IP reputation lookup |
 | VirusTotal | `VIRUSTOTAL_API_KEY` | Public IP and observed file-hash lookups |
 | GreyNoise | `GREYNOISE_API_KEY` | Public IP context |
-| TheHive | `THEHIVE_URL`, `THEHIVE_API_KEY`, `THEHIVE_API_VERSION`, `SOC_THEHIVE_AUTO_CREATE=true` | Optional post-investigation case creation |
+| TheHive | `THEHIVE_URL`, `THEHIVE_API_KEY`, `THEHIVE_API_VERSION` | Operator-submitted case creation with an approval for the incident |
 
-TheHive supports configured `v4` and `v5` API paths; `v4` is the default. A case is reported as created only after the API returns its ID. Follow-up failures are reported as partial results. The model does not directly create cases; the application handles this operation after the report passes its structure check.
+TheHive supports `v4` and `v5` API paths, with `v4` as the default. In token mode, create an approval for the incident with action `thehive.create_case` and have a distinct authenticated approver decide it. The operator submits the retained report from the configured runtime using `python -m scripts.thehive_tool --incident-id <ID> --approval-id <ID>`. A previous submission with an uncertain result requires reconciliation before another delivery. The model's tools are read-only.
 
 Local model inference does not by itself make every integration offline. Gemini sends inference requests externally, and enabled threat-intelligence tools send permitted indicators to their providers. Prepare model caches and disable external integrations when designing an isolated deployment.
 
 ## Security and operational notes
 
 - **Containment:** read-only investigation tools cannot isolate or block a target. Runtime report controls preserve `NOT_EXECUTED`; GRC approval records do not execute actions.
-- **Service access:** the dashboard, broadcast endpoint, and WebSocket rely on the deployment's access controls. Keep the service behind trusted network access or an authenticated reverse proxy with TLS.
+- **Service access.** Use `SOC_API_AUTH_MODE=disabled` for loopback development. Use `SOC_API_AUTH_MODE=token` behind a TLS reverse proxy and bind the upstream application to loopback. Set the exact browser URL in `SOC_ALLOWED_ORIGINS` and `SOC_WEBSOCKET_ALLOWED_ORIGINS`. Configure distinct service and UI credentials through the service environment. Sessions and rate limits are process-local, so use one API worker for this deployment or provide equivalent shared controls at the ingress.
+- **Role assignment.** Give individual credentials stable actor IDs through `SOC_API_TOKENS_JSON`. Grant `SOC_READER` for the dashboard shell, `GRC_READER` for GRC views, `GRC_AUDITOR` for the GRC audit records, and `CASE_APPROVER` for approval decisions as required. Follow [.env.example](.env.example) for the role and origin settings.
+- **GRC integrity.** The database migration chains existing audit and evidence rows without rewriting their contents. The chains verify sequence, links, row contents, and coverage within the local database. Use `scripts.grc.db.verify_integrity_chains()` for a verification snapshot.
+- **Embedded ChromaDB.** Run Chroma in-process through `PersistentClient`. The pinned dependency audit documents four version-specific Chroma HTTP server advisories for which this deployment has no listening Chroma API. Review these exceptions when updating Chroma or changing its deployment mode.
 - **TLS:** verification is enabled by default for Wazuh API, Wazuh Indexer, and TheHive. Install trusted certificates rather than disabling verification in production.
 - **Secrets and data:** keep credentials, logs, incident databases, and personal or organizational data outside version control. Back up the SOC store, review log, and GRC database according to your retention policy.
 - **Audit limits:** JSONL append behavior and SQLite audit triggers provide application-level traceability. They are not protection against a privileged administrator modifying the underlying storage.

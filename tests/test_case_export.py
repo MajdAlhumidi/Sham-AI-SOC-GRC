@@ -42,6 +42,23 @@ class CaseExportTests(unittest.TestCase):
         entries = {name: archive.read(name) for name in archive.namelist()}
         return entries, filename
 
+    def test_compressed_limit_closes_the_temporary_file(self):
+        case_id = self.capture()
+        with tempfile.TemporaryFile(mode="w+b") as output:
+            with patch.object(export, "TemporaryFile", return_value=output), patch.object(export, "MAX_COMPRESSED_BYTES", 32):
+                with self.assertRaisesRegex(export.ExportLimitError, "compressed bytes"):
+                    export.open_bundle(case_id)
+            self.assertTrue(output.closed)
+
+    def test_known_credentials_and_standalone_jwt_are_removed(self):
+        case_id = self.capture(record={"analyst_notes": "FixtureAccess998 eyJmaXh0dXJl.payload.signature"})
+        output, _ = export.open_bundle(case_id, credentials=["FixtureAccess998"])
+        with output, ZipFile(output) as archive:
+            for name in archive.namelist():
+                data = archive.read(name)
+                self.assertNotIn(b"FixtureAccess998", data)
+                self.assertNotIn(b"eyJmaXh0dXJl.payload.signature", data)
+
     def test_manifest_hashes_exact_exported_bytes_and_preserves_source_hash_separately(self):
         case_id = self.capture(alert={"data": {"password": "private-fixture-password", "srcip": "192.0.2.10"}})
         original = store.get_evidence("INC-EXPORT-1", "A1")
