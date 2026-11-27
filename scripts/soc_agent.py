@@ -7,7 +7,7 @@ import re
 import ipaddress
 import sqlite3
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 from hashlib import sha256
 from schema import IncidentRecord
 from alert_context import calibrate_severity, external_lookup_note, ip_scope, resolve_alert_asset, rule_mappings, rule_mitre_ids, untrusted_data
@@ -16,10 +16,10 @@ from vector_store import store_incidents
 from grc.integration import sync_incident
 try:
     from casework.store import asset_criticality, capture as capture_investigation
-    from alert_resume import resume_point
+    from alert_intake import open_alert_intake
 except ModuleNotFoundError:
     from scripts.casework.store import asset_criticality, capture as capture_investigation
-    from scripts.alert_resume import resume_point
+    from scripts.alert_intake import open_alert_intake
 from agent_tools import (
     check_ip_reputation,
     inspect_file_hash,
@@ -390,12 +390,11 @@ def _append_case_result(report_text: str, result: dict) -> str:
             result.get("message", "No successful creation response was returned.")
         )
     return report_text.rstrip() + "\n\n### 9. External Case Management\n" + details + "\n\n"
-def investigate_alert(alert_json: dict):
+def _prepare_investigation(alert_json: dict, case_id: str):
     rule_desc = alert_json.get("rule", {}).get("description", "Unknown Alert")
     rule_level = alert_json.get("rule", {}).get("level", 0)
     asset = resolve_alert_asset(alert_json)
     agent_name = asset['name']
-    case_id = f"INC-{datetime.utcnow().strftime('%Y%m%d')}-{uuid.uuid4().hex.upper()}"
 
     print("\n" + "="*60, flush=True)
     print(f"[+] Processing Alert: [Level {rule_level}] {rule_desc}", flush=True)
@@ -496,92 +495,93 @@ def investigate_alert(alert_json: dict):
         "validated_report_sha256": sha256(report_text.strip().encode("utf-8")).hexdigest(),
     }
 
-    print(f"[REPORT] {case_id}: {classification}; fallback={fallback_used}; stored for analyst review.", flush=True)
+    print(f"[REPORT] {case_id}: {classification}; fallback={fallback_used}; ready for storage.", flush=True)
 
+    data = alert_json.get("data") or {}
+    diagnostic_text = "لم يتم افتراض نجاح مزود أو HTTP status. حالة كل API تُسجل فقط عند وجود نتيجة أداة فعلية."
+    if "### 7. Diagnostic" in report_text:
+        diagnostic_text = report_text.split("### 7. Diagnostic", 1)[1].strip()
+    record = IncidentRecord(
+        incident_id=case_id,
+        source_alert_id=str(alert_json.get("id") or ""),
+        rule_name=rule_desc,
+        classification=classification,
+        alert_summary=f"Automated Tier-2 triage for {rule_desc} on {agent_name}",
+        source_ip=data.get("srcip") or data.get("src_ip") or "N/A",
+        destination_ip=asset['ip'],
+        target_host=asset['name'],
+        user_account=data.get("dstuser") or data.get("srcuser") or data.get("user") or "N/A",
+        raw_logs=alert_json.get("full_log", str(alert_json)),
+        analyst_notes=report_text.strip(),
+        diagnostic_and_audit_notes=diagnostic_text,
+        rule_level=int(rule_level or 0),
+        containment_status="NOT_EXECUTED",
+        llm_provider=provider,
+        llm_model=model_name,
+        fallback_used=fallback_used,
+        report_provenance=provenance,
+        rule_mappings=mappings,
+    )
+    return record, tool_context
+
+
+def _publish_investigation(alert_json, record, context, *, require_casework=False):
     try:
-        data = alert_json.get("data") or {}
-        
-        diagnostic_text = "لم يتم افتراض نجاح مزود أو HTTP status. حالة كل API تُسجل فقط عند وجود نتيجة أداة فعلية."
-        if "### 7. Diagnostic" in report_text:
-            try:
-                diagnostic_text = report_text.split("### 7. Diagnostic")[1].strip()
-            except Exception:
-                pass
+        linked_case = capture_investigation(record, alert_json, context)
+        print(f"[CASEWORK] Evidence saved; linked investigation: {linked_case}", flush=True)
+    except Exception as evidence_error:
+        if require_casework:
+            raise
+        print(f"[CASEWORK-ERROR] Evidence persistence failed: {type(evidence_error).__name__}; incident storage continues.", flush=True)
+    store_incidents([record])
+    print(f"[✓] Stored {record.incident_id} in ChromaDB permanently.", flush=True)
+    grc_result = sync_incident(record, alert_json)
+    print(f"[GRC] Evidence sync: {grc_result['status']}", flush=True)
+    notify_stream(
+        event_type="INVESTIGATION_REPORT",
+        alert_json=alert_json,
+        report_text=record.analyst_notes,
+        classification=record.classification,
+        case_id=record.incident_id,
+        containment_status=record.containment_status,
+        llm_provider=record.llm_provider,
+        llm_model=record.llm_model,
+        fallback_used=record.fallback_used,
+    )
 
-        record = IncidentRecord(
-            incident_id=case_id,
-            source_alert_id=str(alert_json.get("id") or ""),
-            rule_name=rule_desc,
-            classification=classification,
-            alert_summary=f"Automated Tier-2 triage for {rule_desc} on {agent_name}",
-            source_ip=data.get("srcip") or data.get("src_ip") or "N/A",
-            destination_ip=asset['ip'],
-            target_host=asset['name'],
-            user_account=data.get("dstuser") or data.get("srcuser") or data.get("user") or "N/A",
-            raw_logs=alert_json.get("full_log", str(alert_json)),
-            analyst_notes=report_text.strip(),
-            diagnostic_and_audit_notes=diagnostic_text,
-            rule_level=int(rule_level or 0),
-            containment_status="NOT_EXECUTED",
-            llm_provider=provider,
-            llm_model=model_name,
-            fallback_used=fallback_used,
-            report_provenance=provenance,
-            rule_mappings=mappings,
-        )
-        try:
-            linked_case = capture_investigation(record, alert_json, tool_context)
-            print(f"[CASEWORK] Evidence saved; linked investigation: {linked_case}", flush=True)
-        except Exception as evidence_error:
-            print(f"[CASEWORK-ERROR] Evidence persistence failed: {type(evidence_error).__name__}; incident storage continues.", flush=True)
-        store_incidents([record])
-        print(f"[✓] Stored {case_id} in ChromaDB permanently.", flush=True)
 
-        grc_result = sync_incident(record, alert_json)
-        print(f"[GRC] Evidence sync: {grc_result['status']}", flush=True)
+def investigate_alert(alert_json: dict):
+    case_id = f"INC-{datetime.now(timezone.utc):%Y%m%d}-{uuid.uuid4().hex.upper()}"
+    try:
+        record, context = _prepare_investigation(alert_json, case_id)
+        _publish_investigation(alert_json, record, context)
+    except Exception as error:
+        print(f"[!] Investigation error ({type(error).__name__}).", flush=True)
 
-        notify_stream(
-            event_type="INVESTIGATION_REPORT",
-            alert_json=alert_json,
-            report_text=report_text,
-            classification=classification,
-            case_id=case_id,
-            containment_status="NOT_EXECUTED",
-            llm_provider=provider,
-            llm_model=model_name,
-            fallback_used=fallback_used
-        )
-        print(f"[✓] Broadcasted {case_id} to Dashboard.", flush=True)
-    except Exception as save_err:
-        print(f"[!] Storage / Broadcast Error ({type(save_err).__name__}).", flush=True)
+
+def _prepare_queued_alert(alert_json, incident_id):
+    record, context = _prepare_investigation(alert_json, incident_id)
+    return {"record": record.model_dump(), "context": context}
+
+
+def _publish_queued_alert(alert_json, prepared):
+    record = IncidentRecord.model_validate(prepared["record"])
+    _publish_investigation(alert_json, record, prepared["context"], require_casework=True)
+
 
 def monitor_live_wazuh(file_path: str = "/var/ossec/logs/alerts/alerts.json", min_level: int = 7):
-    if not os.path.exists(file_path):
-        print(f"[!] Alert file not found: {file_path}", flush=True)
-        return
-
-    with open(file_path, "r", encoding="utf-8") as f:
-        offset, already_processed = resume_point(f, file_path)
-        f.seek(offset)
-        print(f"\n[✓] SOC Agent is ACTIVE and listening on: {file_path} (Level >= {min_level})", flush=True)
-        print("[*] Waiting for incoming security alerts...\n", flush=True)
-
+    database = os.getenv("SOC_ALERT_INTAKE_DB_PATH") or "data/alert-intake.sqlite3"
+    with open_alert_intake(file_path, database, min_level) as intake:
+        print(f"\n[✓] SOC Agent is listening on: {file_path} (Level >= {min_level})", flush=True)
         while True:
-            line = f.readline()
-            if not line:
-                time.sleep(0.5)
-                continue
-            line = line.strip()
-            if not line:
-                continue
             try:
-                alert = json.loads(line)
-                if str(alert.get("id") or "") in already_processed:
-                    continue
-                if alert.get("rule", {}).get("level", 0) >= min_level:
-                    investigate_alert(alert)
-            except Exception:
-                continue
+                captured = intake.capture()
+            except (OSError, EOFError, sqlite3.Error) as error:
+                print(f"[INTAKE] Capture will retry ({type(error).__name__}).", flush=True)
+                captured = False
+            delivered = intake.deliver(_prepare_queued_alert, _publish_queued_alert)
+            if not captured and not delivered:
+                time.sleep(0.5)
 
 if __name__ == "__main__":
     from agent_tools import validate_wazuh_api_config

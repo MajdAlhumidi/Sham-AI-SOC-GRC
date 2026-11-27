@@ -238,6 +238,32 @@ class GRCIntegrationTests(unittest.TestCase):
         self.assertEqual(len(self.review_log.read_text(encoding="utf-8").splitlines()), 1)
         self.assertEqual(self.client.get("/api/grc/approvals", headers=self.headers).json()["count"], 0)
 
+        # A pending alert captured by the monitor must survive a service restart
+        # and become a retained investigation and GRC evidence via the same path.
+        from scripts.alert_intake import open_alert_intake
+
+        source = Path(self.directory.name) / "alerts.json"
+        database = Path(self.directory.name) / "intake.sqlite3"
+        source.write_bytes(b"")
+        with patch.dict(os.environ, {"SOC_ALERT_RESUME_FILE": "", "SOC_ALERT_INTAKE_DB_PATH": str(database)}):
+            with open_alert_intake(source, database, 7) as intake:
+                intake.capture()
+                source.write_text(json.dumps({**self.alert, "id": "retained-after-restart"}) + "\n", encoding="utf-8")
+                self.assertTrue(intake.capture())
+            with (patch.object(investigation_agent, "_dispatch_tool", return_value=history),
+                  patch.object(soc, "generate_ollama_report", return_value=REPORT),
+                  patch.object(soc, "_maybe_create_thehive_case", return_value={"status": "not_configured"}),
+                  patch.object(soc, "notify_stream"), patch.object(soc.time, "sleep", side_effect=KeyboardInterrupt),
+                  patch("builtins.print"), self.assertRaises(KeyboardInterrupt)):
+                soc.monitor_live_wazuh(str(source))
+            with open_alert_intake(source, database, 7) as intake:
+                self.assertFalse(intake.capture())
+                self.assertFalse(intake.deliver(Mock(), Mock()))
+        retained = vector.store_incidents.call_args.args[0][0]
+        self.assertEqual(retained.source_alert_id, "retained-after-restart")
+        self.assertEqual(self.client.get(f"/api/investigations/incidents/{retained.incident_id}").status_code, 200)
+        self.assertTrue(any(item["metadata"].get("alert_id") == "retained-after-restart" for item in self.evidence()))
+
     def test_grc_failure_keeps_original_human_review(self):
         with patch("scripts.grc.integration._persist", side_effect=sqlite3.OperationalError("locked")):
             response = self.client.post("/api/reviews", headers={"X-Review-Token": "test-review-token"}, json={

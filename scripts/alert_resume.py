@@ -17,7 +17,7 @@ def resume_point(stream, alert_path):
         raise ValueError("Deployment resume cursor does not match the alert file; refusing to skip evidence")
     if offset:
         stream.seek(offset-1)
-        if stream.read(1) != "\n":
+        if stream.read(1) not in ("\n", b"\n"):
             raise ValueError("Deployment resume offset is not a complete JSONL boundary")
     ids = state.get("already_processed_ids", [])
     if not isinstance(ids, list) or not all(isinstance(x, str) for x in ids):

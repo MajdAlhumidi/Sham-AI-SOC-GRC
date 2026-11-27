@@ -21,6 +21,8 @@ same 16 labelled synthetic scenarios. No human baseline or productivity improvem
 invented; AI-only trials, errors and sample limits are explicit.
 See [case follow-ups and evidence](docs/case-followups-and-evidence.md) and
 [comparison experiment](docs/comparison-experiment.md).
+The [investigation study](docs/investigation-study.md) adds a blinded manual
+and agent-assisted comparison using the same alert and evidence tools.
 
 ## Capabilities
 
@@ -167,7 +169,9 @@ python scripts/soc_agent.py
 
 The dashboard is available at `http://127.0.0.1:8000/` on that host. Use a protected connection to access a remote server. The agent broadcasts to the local API on port 8000.
 
-The monitor starts at the **end** of the alert file and processes new qualifying events. Existing lines are not replayed. In the supplied MikroTik rules, a single login failure is level 5 and will not enter the default AI workflow; repeated failures can produce a higher-level alert.
+On first use the monitor starts at the last complete line in the live alert file. It then saves its byte checkpoint and pending investigations in SQLite at `SOC_ALERT_INTAKE_DB_PATH` (default `data/alert-intake.sqlite3`). Use the same persistent database across restarts. The agent recovers unread records from retained Wazuh alert rotations (including compressed archives) and retries incomplete investigations with the original incident ID. Give the agent read access to the live alert log and its retained archives, and write access to the state directory. Retain archives long enough to cover downtime. A missing archive can leave an observable recovery gap.
+
+An existing `SOC_ALERT_RESUME_FILE` cutover cursor can initialize a new intake database once. The native MikroTik template recognizes `MikroTik` and the previous identity. Its first matching failure uses rule 100111 at level 7 and enters the default AI workflow. See [native MikroTik rules](configs/wazuh/MIKROTIK_NATIVE.md).
 
 For persistent deployments, configure each process's working directory and environment in its service configuration. Shell exports do not update already-running systemd services. Restart the relevant services after changing their configuration.
 

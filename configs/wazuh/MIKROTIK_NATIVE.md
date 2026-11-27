@@ -4,12 +4,13 @@ These additive files cover the observed RouterOS remote-log format without a
 Syslog `program_name`:
 
 ```text
-system,error,critical MOKROTIK-STAR: login failure for user admin from 192.168.100.254 via winbox
+system,error,critical MikroTik: login failure for user review-user from 192.0.2.17 via winbox
 ```
 
 `mikrotik_native_decoder.xml` extracts `dstuser`, `srcip`, and `protocol`.
-The router identity is deliberately limited to `MOKROTIK-STAR`; adapt and test
-the prematch before using another identity.
+Use `MikroTik` as the RouterOS identity. The decoder also recognizes the
+previous `MOKROTIK-STAR` identity during migration. Both names use the same
+field extraction and alert rules.
 
 `mikrotik_native_rules.xml` uses IDs 100110–100112, independently of the existing
 100100–100106 rules. A single matching failure triggers 100111 at level 7.

@@ -1,0 +1,79 @@
+{
+  "cases": [
+    {
+      "id": "I01",
+      "alert": {
+        "id": "lab-i01", "timestamp": "2026-11-05T09:10:00Z", "location": "192.0.2.254",
+        "agent": {"id": "000", "name": "study-collector"},
+        "rule": {"id": "100111", "level": 7, "description": "MikroTik management login failure"},
+        "data": {"srcip": "192.0.2.17", "dstuser": "review-user", "protocol": "winbox"},
+        "full_log": "system,error,critical MikroTik: login failure for user review-user from 192.0.2.17 via winbox"
+      },
+      "tools": {
+        "search_related_agent_logs": {
+          "status": "returned", "coverage": "Router management authentication from 09:05 to 09:20 UTC",
+          "events": [
+            {"time": "09:08Z", "user": "review-user", "result": "failed", "source": "192.0.2.17"},
+            {"time": "09:10Z", "user": "review-user", "result": "failed", "source": "192.0.2.17"}
+          ],
+          "successful_logins_observed": 0, "operator_authorization": "unconfirmed"
+        },
+        "search_historical_incidents": {"status": "no_match", "historical_cases": []}
+      }
+    },
+    {
+      "id": "I02",
+      "alert": {
+        "id": "lab-i02", "timestamp": "2026-11-05T10:05:00Z",
+        "agent": {"id": "012", "name": "study-endpoint-02", "ip": "192.0.2.42"},
+        "rule": {"id": "60106", "level": 8, "description": "Service configuration changed"},
+        "data": {"user": "lab-maintainer", "service": "inventory-scan"},
+        "full_log": "The inventory-scan service configuration changed on study-endpoint-02."
+      },
+      "tools": {
+        "search_related_agent_logs": {
+          "status": "returned", "change_id": "LAB-CHANGE-02", "approved_window": "10:00–10:20 UTC",
+          "approved_user": "lab-maintainer", "approved_service": "inventory-scan", "approved_asset": "study-endpoint-02"
+        },
+        "inspect_process_tree": {
+          "status": "returned", "event_time": "10:05 UTC", "user": "lab-maintainer",
+          "parent": "approved maintenance orchestrator", "action": "restart inventory-scan", "job": "LAB-CHANGE-02"
+        }
+      }
+    },
+    {
+      "id": "I03",
+      "alert": {
+        "id": "lab-i03", "timestamp": "2026-11-05T11:12:00Z", "location": "study-cloudtrail",
+        "agent": {"id": "000", "name": "study-collector"},
+        "rule": {"id": "80204", "level": 9, "description": "Cloud IAM authorization policy changed"},
+        "data": {"srcip": "198.51.100.22", "user": "study-admin"},
+        "full_log": "A CloudTrail policy update was reported. The policy diff was unavailable."
+      },
+      "tools": {
+        "search_related_agent_logs": {"status": "error", "message": "The fixture's CloudTrail context is unavailable."},
+        "search_historical_incidents": {"status": "no_match", "historical_cases": []}
+      }
+    },
+    {
+      "id": "I04",
+      "alert": {
+        "id": "lab-i04", "timestamp": "2026-11-05T13:21:00Z",
+        "agent": {"id": "021", "name": "study-endpoint-04", "ip": "192.0.2.84"},
+        "rule": {"id": "92004", "level": 10, "description": "Outbound connection to a restricted destination"},
+        "data": {"dstip": "203.0.113.70", "user": "lab-transfer"},
+        "full_log": "A restricted destination was contacted from study-endpoint-04."
+      },
+      "tools": {
+        "inspect_network_connections": {
+          "status": "returned", "connection_id": "LAB-CONN-04", "destination": "203.0.113.70",
+          "disposition": "allowed", "bytes_sent": 13220, "policy": "data transfer prohibited"
+        },
+        "search_related_agent_logs": {
+          "status": "returned", "connection_id": "LAB-CONN-04",
+          "review": "LAB-REVIEW-04 confirmed unauthorized transfer of a synthetic restricted file"
+        }
+      }
+    }
+  ]
+}
